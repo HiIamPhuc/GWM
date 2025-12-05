@@ -10,7 +10,7 @@ This implements the Graph World Model with embedding-based graph encoding:
 
 import torch
 import torch.nn as nn
-from transformers import AutoModel, AutoTokenizer, LlamaForCausalLM
+from transformers import AutoModel, AutoTokenizer, LlamaForCausalLM, BitsAndBytesConfig
 from typing import Optional, Tuple
 import torch.nn.functional as F
 
@@ -74,10 +74,14 @@ class GWM_E(nn.Module):
         # Check if 8-bit quantization is requested (for large models on limited GPU)
         
         if use_8bit and device == "cuda":
-            # Load with 8-bit quantization to save memory
+            # Load with 8-bit quantization to save memory using BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=True,
+                llm_int8_threshold=6.0,
+            )
             self.llm = LlamaForCausalLM.from_pretrained(
                 llama_model_path,
-                load_in_8bit=True,
+                quantization_config=quantization_config,
                 device_map="auto",
                 low_cpu_mem_usage=True,
             )
