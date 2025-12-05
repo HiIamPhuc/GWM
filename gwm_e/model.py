@@ -10,7 +10,7 @@ This implements the Graph World Model with embedding-based graph encoding:
 
 import torch
 import torch.nn as nn
-from transformers import AutoModel, AutoTokenizer, LlamaForCausalLM, LlamaTokenizer
+from transformers import AutoModel, AutoTokenizer, LlamaForCausalLM
 from typing import Optional, Tuple
 import torch.nn.functional as F
 
@@ -64,11 +64,16 @@ class GWM_E(nn.Module):
         super().__init__()
         
         # Load LLaMA model and tokenizer
-        self.tokenizer = LlamaTokenizer.from_pretrained(llama_model_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(llama_model_path)
+        
+        # Determine device - prefer CUDA if available
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
         self.llm = LlamaForCausalLM.from_pretrained(
             llama_model_path,
-            torch_dtype=torch.float16,
-            device_map="auto",
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            device_map=device,
+            low_cpu_mem_usage=True,
         )
         
         # Get LLaMA embedding dimension
