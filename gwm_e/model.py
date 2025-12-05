@@ -60,6 +60,8 @@ class GWM_E(nn.Module):
         projector_hidden_dim: int = 4096,
         num_hops: int = 5,
         freeze_llm: bool = True,
+        use_8bit: bool = False,
+        **kwargs
     ):
         super().__init__()
         
@@ -69,12 +71,25 @@ class GWM_E(nn.Module):
         # Determine device - prefer CUDA if available
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        self.llm = LlamaForCausalLM.from_pretrained(
-            llama_model_path,
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-            device_map=device,
-            low_cpu_mem_usage=True,
-        )
+        # Check if 8-bit quantization is requested (for large models on limited GPU)
+        
+        if use_8bit and device == "cuda":
+            # Load with 8-bit quantization to save memory
+            self.llm = LlamaForCausalLM.from_pretrained(
+                llama_model_path,
+                load_in_8bit=True,
+                device_map="auto",
+                low_cpu_mem_usage=True,
+            )
+            print("✓ Loaded model with 8-bit quantization")
+        else:
+            # Load normally in FP16
+            self.llm = LlamaForCausalLM.from_pretrained(
+                llama_model_path,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                device_map=device,
+                low_cpu_mem_usage=True,
+            )
         
         # Get LLaMA embedding dimension
         self.llm_embed_dim = self.llm.config.hidden_size
