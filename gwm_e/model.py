@@ -108,7 +108,7 @@ class GWM_E(nn.Module):
             input_dim=graph_embedding_dim,
             hidden_dim=projector_hidden_dim,
             output_dim=self.llm_embed_dim
-        )
+        ).to(device)
         
         self.num_hops = num_hops
         
