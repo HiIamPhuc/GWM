@@ -106,7 +106,7 @@ class GWM_E(nn.Module):
                     torch_dtype=torch.float16,
                     device_map=device_map_strategy,
                     low_cpu_mem_usage=True,
-                    max_memory={0: "14GB", 1: "14GB"} if num_gpus > 1 else None,
+                    max_memory={0: "13GB", 1: "13GB"} if num_gpus > 1 else None,
                 )
         else:
             # Load normally in FP16/FP32 with multi-GPU support
@@ -115,7 +115,7 @@ class GWM_E(nn.Module):
                 torch_dtype=torch.float16 if device == "cuda" else torch.float32,
                 device_map=device_map_strategy,
                 low_cpu_mem_usage=True,
-                max_memory={0: "14GB", 1: "14GB"} if num_gpus > 1 else None,
+                max_memory={0: "13GB", 1: "13GB"} if num_gpus > 1 else None,
             )
         
         # Print device map if using multiple GPUs
