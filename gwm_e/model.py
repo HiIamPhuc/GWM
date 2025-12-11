@@ -68,32 +68,52 @@ class GWM_E(nn.Module):
         # Load LLaMA model and tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(llama_model_path)
         
-        # Determine device - prefer CUDA if available
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Check available GPUs
+        num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        device = "cuda" if num_gpus > 0 else "cpu"
+        
+        if num_gpus > 1:
+            print(f"✓ Detected {num_gpus} GPUs - will distribute model across all GPUs")
+        elif num_gpus == 1:
+            print(f"✓ Detected 1 GPU")
         
         # Check if 8-bit quantization is requested (for large models on limited GPU)
         
         if use_8bit and device == "cuda":
-            # Load with 8-bit quantization to save memory using BitsAndBytesConfig
-            quantization_config = BitsAndBytesConfig(
-                load_in_8bit=True,
-                llm_int8_threshold=6.0,
-            )
-            self.llm = LlamaForCausalLM.from_pretrained(
-                llama_model_path,
-                quantization_config=quantization_config,
-                device_map="auto",
-                low_cpu_mem_usage=True,
-            )
-            print("✓ Loaded model with 8-bit quantization")
+            try:
+                # Load with 8-bit quantization to save memory using BitsAndBytesConfig
+                quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_threshold=6.0,
+                )
+                self.llm = LlamaForCausalLM.from_pretrained(
+                    llama_model_path,
+                    quantization_config=quantization_config,
+                    device_map="auto",
+                    low_cpu_mem_usage=True,
+                )
+                print("✓ Loaded model with 8-bit quantization")
+            except Exception as e:
+                print(f"⚠️  8-bit quantization failed: {e}")
+                print("   Falling back to FP16 (this will use more memory)")
+                self.llm = LlamaForCausalLM.from_pretrained(
+                    llama_model_path,
+                    torch_dtype=torch.float16,
+                    device_map="auto",  # Auto will use multiple GPUs if available
+                    low_cpu_mem_usage=True,
+                )
         else:
-            # Load normally in FP16
+            # Load normally in FP16/FP32 with multi-GPU support
             self.llm = LlamaForCausalLM.from_pretrained(
                 llama_model_path,
                 torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map=device,
+                device_map="auto" if num_gpus > 1 else device,  # Use auto for multi-GPU
                 low_cpu_mem_usage=True,
             )
+        
+        # Print device map if using multiple GPUs
+        if hasattr(self.llm, 'hf_device_map'):
+            print(f"   Model device map: {self.llm.hf_device_map}")
         
         # Get LLaMA embedding dimension
         self.llm_embed_dim = self.llm.config.hidden_size
@@ -103,12 +123,13 @@ class GWM_E(nn.Module):
             for param in self.llm.parameters():
                 param.requires_grad = False
         
-        # Graph projector (trainable)
+        # Graph projector (trainable) - place on first GPU if available
+        projector_device = "cuda:0" if device == "cuda" else device
         self.projector = GraphProjector(
             input_dim=graph_embedding_dim,
             hidden_dim=projector_hidden_dim,
             output_dim=self.llm_embed_dim
-        ).to(device)
+        ).to(projector_device)
         
         self.num_hops = num_hops
         
