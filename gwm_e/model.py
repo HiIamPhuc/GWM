@@ -77,6 +77,10 @@ class GWM_E(nn.Module):
         elif num_gpus == 1:
             print(f"✓ Detected 1 GPU")
         
+        # Determine device map strategy for multi-GPU
+        # "balanced" tries to balance memory usage across GPUs more evenly than "auto"
+        device_map_strategy = "balanced" if num_gpus > 1 else ("cuda" if num_gpus == 1 else "cpu")
+        
         # Check if 8-bit quantization is requested (for large models on limited GPU)
         
         if use_8bit and device == "cuda":
@@ -89,8 +93,9 @@ class GWM_E(nn.Module):
                 self.llm = LlamaForCausalLM.from_pretrained(
                     llama_model_path,
                     quantization_config=quantization_config,
-                    device_map="auto",
+                    device_map=device_map_strategy,
                     low_cpu_mem_usage=True,
+                    max_memory={0: "13GB", 1: "13GB"} if num_gpus > 1 else None,  # Reserve memory per GPU
                 )
                 print("✓ Loaded model with 8-bit quantization")
             except Exception as e:
@@ -99,16 +104,18 @@ class GWM_E(nn.Module):
                 self.llm = LlamaForCausalLM.from_pretrained(
                     llama_model_path,
                     torch_dtype=torch.float16,
-                    device_map="auto",  # Auto will use multiple GPUs if available
+                    device_map=device_map_strategy,
                     low_cpu_mem_usage=True,
+                    max_memory={0: "14GB", 1: "14GB"} if num_gpus > 1 else None,
                 )
         else:
             # Load normally in FP16/FP32 with multi-GPU support
             self.llm = LlamaForCausalLM.from_pretrained(
                 llama_model_path,
                 torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map="auto" if num_gpus > 1 else device,  # Use auto for multi-GPU
+                device_map=device_map_strategy,
                 low_cpu_mem_usage=True,
+                max_memory={0: "14GB", 1: "14GB"} if num_gpus > 1 else None,
             )
         
         # Print device map if using multiple GPUs
