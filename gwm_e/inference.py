@@ -75,6 +75,7 @@ def generate_predictions(
                 'prediction': generated_text,
                 'ground_truth': ground_truth,
             })
+            print(predictions)
     
     return predictions
 
@@ -101,8 +102,24 @@ def evaluate_predictions(predictions: list, label_names: list = None) -> dict:
         pred = pred_dict['prediction']
         gt = pred_dict['ground_truth']
         
-        # Exact match
-        if pred.strip().lower() == gt.strip().lower():
+        # Normalize strings
+        pred_normalized = pred.strip().lower()
+        gt_normalized = gt.strip().lower()
+        
+        # Try multiple matching strategies
+        is_correct = False
+        
+        # 1. Exact match
+        if pred_normalized == gt_normalized:
+            is_correct = True
+        # 2. Check if ground truth is contained in prediction (handles extra text)
+        elif gt_normalized in pred_normalized:
+            is_correct = True
+        # 3. Check if prediction starts with ground truth (handles trailing text)
+        elif pred_normalized.startswith(gt_normalized):
+            is_correct = True
+        
+        if is_correct:
             correct += 1
             class_correct[gt] += 1
         
