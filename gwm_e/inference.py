@@ -62,18 +62,19 @@ def generate_predictions(
                 temperature=temperature,
             )
 
-            print(generated_ids)
-            
             # Decode prediction
-            # Skip the graph prefix tokens (num_hops) AND input tokens to get only the generated part
-            # When using inputs_embeds, the output includes: [graph_prefix + input_text + generated_text]
-            # We need to skip: num_hops (graph tokens) + input_ids.shape[1] (input text tokens)
-            prefix_length = model.num_hops + input_ids.shape[1]
-            print(f"Num hops: {model.num_hops} + Input-ids: {input_ids.shape[1]}")
+            # When using inputs_embeds, generate() returns ONLY the newly generated tokens
+            # (not the full sequence with prefix), so we decode the entire output
             generated_text = model.tokenizer.decode(
                 generated_ids[0],
                 skip_special_tokens=True
             ).strip()
+            
+            # Remove the "assistant" prefix if present (from LLaMA chat template)
+            if generated_text.lower().startswith('assistant'):
+                generated_text = generated_text[len('assistant'):].strip()
+                # Also remove leading newlines or colons
+                generated_text = generated_text.lstrip('\n:').strip()
             
             predictions.append({
                 'node_id': node_id,
