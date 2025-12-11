@@ -68,7 +68,7 @@ def generate_predictions(
             # We need to skip: num_hops (graph tokens) + input_ids.shape[1] (input text tokens)
             prefix_length = model.num_hops + input_ids.shape[1]
             generated_text = model.tokenizer.decode(
-                generated_ids[0][prefix_length:],
+                generated_ids[0],
                 skip_special_tokens=True
             ).strip()
             
