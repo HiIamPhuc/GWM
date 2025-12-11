@@ -50,8 +50,11 @@ def generate_predictions(
             
             # Prepare inputs (add batch dimension)
             multi_hop_embedding = sample['multi_hop_embedding'].unsqueeze(0).to(device)
+            print(multi_hop_embedding)
             input_ids = sample['input_ids'].unsqueeze(0).to(device)
+            print(input_ids)
             attention_mask = sample['attention_mask'].unsqueeze(0).to(device)
+            print(attention_mask)
             
             # Generate prediction
             generated_ids = model.generate(
@@ -61,6 +64,7 @@ def generate_predictions(
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
             )
+            print(generated_ids)
 
             # Decode prediction
             # When using inputs_embeds, generate() returns ONLY the newly generated tokens
