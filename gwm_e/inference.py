@@ -34,12 +34,28 @@ def cleanup_pred(generated_text: str):
     if '\n' in cleaned_text:
         cleaned_text = cleaned_text.split('\n')[0].strip()
     
-    # 4. If still has extra text, try to extract just the category name
+    # 4. Remove common wrong prefixes
+    wrong_prefixes = ['this paper belongs to category:', 'paper:', 'title:', 'category:', '##']
+    for prefix in wrong_prefixes:
+        if cleaned_text.lower().startswith(prefix):
+            cleaned_text = cleaned_text[len(prefix):].strip()
+    
+    # 5. If still has extra text, try to extract just the category name
     # Categories are usually single words or words connected with underscores
-    # Take the first token before any space or punctuation (except underscore)
-    if ' ' in cleaned_text and '_' in cleaned_text:
-        # If has both space and underscore, take everything before first space
-        cleaned_text = cleaned_text.split(' ')[0].strip()
+    # Look for a token that looks like a category (contains underscore or is capitalized)
+    if ' ' in cleaned_text:
+        tokens = cleaned_text.split()
+        # Try to find first token that looks like a category
+        for token in tokens:
+            if '_' in token or (token[0].isupper() and len(token) > 2):
+                cleaned_text = token
+                break
+        # If no good token found, just take first one
+        if ' ' in cleaned_text:
+            cleaned_text = tokens[0]
+    
+    # 6. Remove trailing punctuation
+    cleaned_text = cleaned_text.rstrip('.,!?:;')
 
     return cleaned_text
 
