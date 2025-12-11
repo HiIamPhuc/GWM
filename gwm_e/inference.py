@@ -18,11 +18,12 @@ from dataset import GWMDataset
 
 def cleanup_pred(generated_text: str):
     """
-    Clean up prediction
+    Clean up prediction by removing assistant prefix and extracting category name.
     """
-    cleaned_text = generated_text
+    cleaned_text = generated_text.strip()
 
     # 1. Remove "assistant" prefix (case-insensitive)
+    # Check lowercase but remove from original position
     if cleaned_text.lower().startswith('assistant'):
         cleaned_text = cleaned_text[len('assistant'):].strip()
     
