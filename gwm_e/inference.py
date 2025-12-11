@@ -16,6 +16,31 @@ import numpy as np
 from model import GWM_E
 from dataset import GWMDataset
 
+def cleanup_pred(generated_text: str):
+    """
+    Clean up prediction
+    """
+    cleaned_text = generated_text
+
+    # 1. Remove "assistant" prefix (case-insensitive)
+    if cleaned_text.lower().startswith('assistant'):
+        cleaned_text = cleaned_text[len('assistant'):].strip()
+    
+    # 2. Remove leading newlines, colons, or whitespace
+    cleaned_text = cleaned_text.lstrip('\n:').strip()
+    
+    # 3. Extract only the first line (category should be on first line)
+    if '\n' in cleaned_text:
+        cleaned_text = cleaned_text.split('\n')[0].strip()
+    
+    # 4. If still has extra text, try to extract just the category name
+    # Categories are usually single words or words connected with underscores
+    # Take the first token before any space or punctuation (except underscore)
+    if ' ' in cleaned_text and '_' in cleaned_text:
+        # If has both space and underscore, take everything before first space
+        cleaned_text = cleaned_text.split(' ')[0].strip()
+
+    return cleaned_text
 
 def generate_predictions(
     model: GWM_E,
@@ -50,11 +75,8 @@ def generate_predictions(
             
             # Prepare inputs (add batch dimension)
             multi_hop_embedding = sample['multi_hop_embedding'].unsqueeze(0).to(device)
-            print(multi_hop_embedding)
             input_ids = sample['input_ids'].unsqueeze(0).to(device)
-            print(input_ids)
             attention_mask = sample['attention_mask'].unsqueeze(0).to(device)
-            print(attention_mask)
             
             # Generate prediction
             generated_ids = model.generate(
@@ -64,7 +86,6 @@ def generate_predictions(
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
             )
-            print(generated_ids)
 
             # Decode prediction
             # When using inputs_embeds, generate() returns ONLY the newly generated tokens
@@ -74,11 +95,7 @@ def generate_predictions(
                 skip_special_tokens=True
             ).strip()
             
-            # Remove the "assistant" prefix if present (from LLaMA chat template)
-            if generated_text.lower().startswith('assistant'):
-                generated_text = generated_text[len('assistant'):].strip()
-                # Also remove leading newlines or colons
-                generated_text = generated_text.lstrip('\n:').strip()
+            generated_text = cleanup_pred(generated_text)
             
             predictions.append({
                 'node_id': node_id,
