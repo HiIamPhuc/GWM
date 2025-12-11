@@ -79,7 +79,7 @@ class GWM_E(nn.Module):
         
         # Determine device map strategy for multi-GPU
         # "balanced" tries to balance memory usage across GPUs more evenly than "auto"
-        device_map_strategy = "balanced" if num_gpus > 1 else ("cuda" if num_gpus == 1 else "cpu")
+        device_map_strategy = {0: "cuda:0", 1: "cuda:1"} if num_gpus > 1 else ("cuda" if num_gpus == 1 else "cpu")
         
         # Check if 8-bit quantization is requested (for large models on limited GPU)
         
@@ -130,13 +130,12 @@ class GWM_E(nn.Module):
             for param in self.llm.parameters():
                 param.requires_grad = False
         
-        # Graph projector (trainable) - place on first GPU if available
-        projector_device = "cuda:0" if device == "cuda" else device
-        self.projector = GraphProjector(
+        # Graph projector (trainable)
+        self.projector = nn.DataParallel(GraphProjector(
             input_dim=graph_embedding_dim,
             hidden_dim=projector_hidden_dim,
             output_dim=self.llm_embed_dim
-        ).to(projector_device)
+        )).to(device)
         
         self.num_hops = num_hops
         
