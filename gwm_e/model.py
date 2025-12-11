@@ -144,7 +144,10 @@ class GWM_E(nn.Module):
         # 2. Get text embeddings from LLM
         text_embeds = self.llm.get_input_embeddings()(input_ids)  # [B, seq_len, D]
         
-        # 3. Concatenate graph prefix with text embeddings
+        # 3. Ensure graph_tokens match text_embeds dtype (fix FP32/FP16 mismatch)
+        graph_tokens = graph_tokens.to(text_embeds.dtype)
+        
+        # 4. Concatenate graph prefix with text embeddings
         # Graph tokens act as prefix
         inputs_embeds = torch.cat([graph_tokens, text_embeds], dim=1)  # [B, num_hops + seq_len, D]
         
@@ -207,6 +210,10 @@ class GWM_E(nn.Module):
         # Prepare graph prefix
         graph_tokens = self.prepare_graph_prefix(multi_hop_embeddings)
         text_embeds = self.llm.get_input_embeddings()(input_ids)
+        
+        # Ensure graph_tokens match text_embeds dtype (fix FP32/FP16 mismatch)
+        graph_tokens = graph_tokens.to(text_embeds.dtype)
+        
         inputs_embeds = torch.cat([graph_tokens, text_embeds], dim=1)
         
         # Adjust attention mask
