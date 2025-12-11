@@ -10,7 +10,7 @@ This implements the Graph World Model with embedding-based graph encoding:
 
 import torch
 import torch.nn as nn
-from transformers import AutoModel, AutoTokenizer, LlamaForCausalLM, BitsAndBytesConfig
+from transformers import AutoModel, AutoTokenizer, LlamaForCausalLM
 from typing import Optional, Tuple
 import torch.nn.functional as F
 
@@ -55,12 +55,11 @@ class GWM_E(nn.Module):
     
     def __init__(
         self,
-        llama_model_path: str = "meta-llama/Meta-Llama-3-8B-Instruct",
+        llama_model_path: str = "meta-llama/Llama-3.2-3B-Instruct",
         graph_embedding_dim: int = 2048,
         projector_hidden_dim: int = 4096,
         num_hops: int = 5,
         freeze_llm: bool = True,
-        use_8bit: bool = False,
         **kwargs
     ):
         super().__init__()
@@ -68,59 +67,17 @@ class GWM_E(nn.Module):
         # Load LLaMA model and tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(llama_model_path)
         
-        # Check available GPUs
-        num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
-        device = "cuda" if num_gpus > 0 else "cpu"
+        # Determine device
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        if num_gpus > 1:
-            print(f"✓ Detected {num_gpus} GPUs - will distribute model across all GPUs")
-        elif num_gpus == 1:
-            print(f"✓ Detected 1 GPU")
-        
-        # Determine device map strategy for multi-GPU
-        # "balanced" tries to balance memory usage across GPUs more evenly than "auto"
-        device_map_strategy = {0: "cuda:0", 1: "cuda:1"} if num_gpus > 1 else ("cuda" if num_gpus == 1 else "cpu")
-        
-        # Check if 8-bit quantization is requested (for large models on limited GPU)
-        
-        if use_8bit and device == "cuda":
-            try:
-                # Load with 8-bit quantization to save memory using BitsAndBytesConfig
-                # quantization_config = BitsAndBytesConfig(
-                #     load_in_8bit=True,
-                #     llm_int8_threshold=6.0,
-                # )
-                self.llm = LlamaForCausalLM.from_pretrained(
-                    llama_model_path,
-                    # quantization_config=quantization_config,
-                    device_map=device_map_strategy,
-                    low_cpu_mem_usage=True,
-                    max_memory={0: "13GB", 1: "13GB"} if num_gpus > 1 else None,  # Reserve memory per GPU
-                )
-                print("✓ Loaded model with 8-bit quantization")
-            except Exception as e:
-                print(f"⚠️  8-bit quantization failed: {e}")
-                print("   Falling back to FP16 (this will use more memory)")
-                self.llm = LlamaForCausalLM.from_pretrained(
-                    llama_model_path,
-                    torch_dtype=torch.float16,
-                    device_map=device_map_strategy,
-                    low_cpu_mem_usage=True,
-                    max_memory={0: "13GB", 1: "13GB"} if num_gpus > 1 else None,
-                )
-        else:
-            # Load normally in FP16/FP32 with multi-GPU support
-            self.llm = LlamaForCausalLM.from_pretrained(
-                llama_model_path,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map=device_map_strategy,
-                low_cpu_mem_usage=True,
-                max_memory={0: "13GB", 1: "13GB"} if num_gpus > 1 else None,
-            )
-        
-        # Print device map if using multiple GPUs
-        if hasattr(self.llm, 'hf_device_map'):
-            print(f"   Model device map: {self.llm.hf_device_map}")
+        # Load LLaMA model with FP16 for efficiency
+        self.llm = LlamaForCausalLM.from_pretrained(
+            llama_model_path,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            device_map="auto",
+            low_cpu_mem_usage=True,
+        )
+        print(f"✓ Loaded {llama_model_path} on {device}")
         
         # Get LLaMA embedding dimension
         self.llm_embed_dim = self.llm.config.hidden_size
@@ -131,11 +88,11 @@ class GWM_E(nn.Module):
                 param.requires_grad = False
         
         # Graph projector (trainable)
-        self.projector = nn.DataParallel(GraphProjector(
+        self.projector = GraphProjector(
             input_dim=graph_embedding_dim,
             hidden_dim=projector_hidden_dim,
             output_dim=self.llm_embed_dim
-        )).to(device)
+        ).to(device)
         
         self.num_hops = num_hops
         
