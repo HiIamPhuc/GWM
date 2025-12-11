@@ -86,13 +86,13 @@ class GWM_E(nn.Module):
         if use_8bit and device == "cuda":
             try:
                 # Load with 8-bit quantization to save memory using BitsAndBytesConfig
-                quantization_config = BitsAndBytesConfig(
-                    load_in_8bit=True,
-                    llm_int8_threshold=6.0,
-                )
+                # quantization_config = BitsAndBytesConfig(
+                #     load_in_8bit=True,
+                #     llm_int8_threshold=6.0,
+                # )
                 self.llm = LlamaForCausalLM.from_pretrained(
                     llama_model_path,
-                    quantization_config=quantization_config,
+                    # quantization_config=quantization_config,
                     device_map=device_map_strategy,
                     low_cpu_mem_usage=True,
                     max_memory={0: "13GB", 1: "13GB"} if num_gpus > 1 else None,  # Reserve memory per GPU
