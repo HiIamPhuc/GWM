@@ -63,10 +63,12 @@ def generate_predictions(
             )
             
             # Decode prediction
-            # Skip the input tokens to get only the generated part
-            input_length = input_ids.shape[1]
+            # Skip the graph prefix tokens (num_hops) AND input tokens to get only the generated part
+            # When using inputs_embeds, the output includes: [graph_prefix + input_text + generated_text]
+            # We need to skip: num_hops (graph tokens) + input_ids.shape[1] (input text tokens)
+            prefix_length = model.num_hops + input_ids.shape[1]
             generated_text = model.tokenizer.decode(
-                generated_ids[0][input_length:],
+                generated_ids[0][prefix_length:],
                 skip_special_tokens=True
             ).strip()
             
