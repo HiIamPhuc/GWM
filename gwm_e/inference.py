@@ -119,7 +119,7 @@ def generate_predictions(
                 'prediction': generated_text,
                 'ground_truth': ground_truth,
             })
-            print(predictions)
+            # print(predictions)
     
     return predictions
 
