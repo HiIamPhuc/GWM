@@ -20,11 +20,12 @@ class GraphProjector(nn.Module):
     MLP projector to map graph embeddings to LLM embedding space.
     Maps from BERT embedding dimension (e.g., 2048) to LLaMA embedding dimension (e.g., 4096).
     """
-    def __init__(self, input_dim: int = 2048, hidden_dim: int = 4096, output_dim: int = 4096):
+    def __init__(self, input_dim: int = 2048, hidden_dim: int = 4096, output_dim: int = 4096, dropout: float = 0.1):
         super().__init__()
         self.projector = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.GELU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim, output_dim)
         )
     
@@ -60,6 +61,7 @@ class GWM_E(nn.Module):
         projector_hidden_dim: int = 4096,
         num_hops: int = 5,
         freeze_llm: bool = True,
+        dropout: float = 0.1,
         **kwargs
     ):
         super().__init__()
@@ -91,7 +93,8 @@ class GWM_E(nn.Module):
         self.projector = GraphProjector(
             input_dim=graph_embedding_dim,
             hidden_dim=projector_hidden_dim,
-            output_dim=self.llm_embed_dim
+            output_dim=self.llm_embed_dim,
+            dropout=dropout
         ).to(device)
         
         self.num_hops = num_hops

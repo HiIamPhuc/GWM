@@ -112,7 +112,7 @@ def generate_predictions(
                 skip_special_tokens=True
             ).strip()
             
-            generated_text = cleanup_pred(generated_text)
+            # generated_text = cleanup_pred(generated_text)
             
             predictions.append({
                 'node_id': node_id,
