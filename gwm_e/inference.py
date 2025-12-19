@@ -65,6 +65,7 @@ def generate_predictions(
     device: str = 'cuda',
     max_new_tokens: int = 50,
     temperature: float = 0.1,  # Lower temperature for more deterministic outputs
+    verbose: bool = True,
 ) -> list:
     """
     Generate predictions for all test samples.
@@ -76,7 +77,12 @@ def generate_predictions(
     predictions = []
     
     with torch.no_grad():
-        for idx in tqdm(range(len(test_dataset)), desc="Generating predictions"):
+        if verbose:
+            progress_bar = tqdm(range(len(test_dataset)), desc="Generating predictions", ncols=100)
+        else:
+            progress_bar = range(len(test_dataset))
+
+        for idx in progress_bar:
             sample = test_dataset[idx]
             
             # Get conversation data
