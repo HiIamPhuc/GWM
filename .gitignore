@@ -1,3 +1,4 @@
 processed/
-processed_prompt-optimized/
 __pycache__/
+raw/
+.env
