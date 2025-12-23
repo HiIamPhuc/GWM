@@ -26,7 +26,7 @@ class GWMDataset(Dataset):
         jsonl_path: str,
         embedding_path: str,
         tokenizer,
-        max_length: int = 512,
+        max_length: int = 1024,  # Increased for link prediction (2 papers)
         num_hops: int = 5,
     ):
         """
@@ -34,7 +34,7 @@ class GWMDataset(Dataset):
             jsonl_path: Path to JSONL file with conversations
             embedding_path: Path to multi_hop_graph_embedding.pt
             tokenizer: LLaMA tokenizer
-            max_length: Maximum sequence length for text
+            max_length: Maximum sequence length for text (1024 for link prediction)
             num_hops: Number of hops in multi-hop embeddings
         """
         self.tokenizer = tokenizer
