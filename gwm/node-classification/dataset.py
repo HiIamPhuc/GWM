@@ -51,22 +51,12 @@ class GWMDataset(Dataset):
         self.multi_hop_embeddings = torch.load(embedding_path)
         print(f"Loaded embeddings shape: {self.multi_hop_embeddings.shape}")
         
-        # Detect task type based on embedding structure
-        # Node classification: [num_hops, num_nodes, embedding_dim]
-        # Link prediction: [num_edges, num_hops, embedding_dim]
-        if len(self.multi_hop_embeddings.shape) == 3:
-            if self.multi_hop_embeddings.shape[0] == self.num_hops:
-                # Node classification format
-                self.task_type = 'node_classification'
-                print(f"Detected task: Node Classification")
-            elif self.multi_hop_embeddings.shape[1] == self.num_hops:
-                # Link prediction format
-                self.task_type = 'link_prediction'
-                print(f"Detected task: Link Prediction")
-            else:
-                raise ValueError(f"Unexpected embedding shape: {self.multi_hop_embeddings.shape}")
-        else:
-            raise ValueError(f"Expected 3D embeddings, got shape: {self.multi_hop_embeddings.shape}")
+        # Validate dimensions for node classification
+        # Expected format: [num_hops, num_nodes, embedding_dim]
+        assert len(self.multi_hop_embeddings.shape) == 3, \
+            f"Expected 3D embeddings, got shape: {self.multi_hop_embeddings.shape}"
+        assert self.multi_hop_embeddings.shape[0] == self.num_hops, \
+            f"Expected {self.num_hops} hops, got {self.multi_hop_embeddings.shape[0]}"
         
         print(f"Loaded {len(self.conversations)} conversations")
     
@@ -85,24 +75,16 @@ class GWMDataset(Dataset):
         """
         conv = self.conversations[idx]
         
-        # Get multi-hop embedding based on task type
-        if self.task_type == 'node_classification':
-            # Get node ID
-            node_ids = conv['id']
-            if isinstance(node_ids, list):
-                node_id = node_ids[0]  # Take first node
-            else:
-                node_id = node_ids
-            
-            # Extract embedding for this node
-            # Shape: [num_hops, embedding_dim]
-            multi_hop_embedding = self.multi_hop_embeddings[:, node_id, :]
+        # Get node ID
+        node_ids = conv['id']
+        if isinstance(node_ids, list):
+            node_id = node_ids[0]  # Take first node
+        else:
+            node_id = node_ids
         
-        elif self.task_type == 'link_prediction':
-            # For link prediction, embeddings are already per-edge
-            # Just index by the current sample index
-            # Shape: [num_hops, embedding_dim]
-            multi_hop_embedding = self.multi_hop_embeddings[idx]
+        # Extract multi-hop embedding for this node
+        # Shape: [num_hops, embedding_dim]
+        multi_hop_embedding = self.multi_hop_embeddings[:, node_id, :]
         
         # Build conversation text
         conversation_text = self._format_conversation(conv['conversations'])
