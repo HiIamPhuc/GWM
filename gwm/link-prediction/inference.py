@@ -16,49 +16,6 @@ import numpy as np
 from model import GWM_E
 from dataset import GWMDataset
 
-def cleanup_pred(generated_text: str):
-    """
-    Clean up prediction by removing assistant prefix and extracting category name.
-    """
-    cleaned_text = generated_text.strip()
-
-    # 1. Remove "assistant" prefix (case-insensitive)
-    # Check lowercase but remove from original position
-    if cleaned_text.lower().startswith('assistant'):
-        cleaned_text = cleaned_text[len('assistant'):].strip()
-    
-    # 2. Remove leading newlines, colons, or whitespace
-    cleaned_text = cleaned_text.lstrip('\n:').strip()
-    
-    # 3. Extract only the first line (category should be on first line)
-    if '\n' in cleaned_text:
-        cleaned_text = cleaned_text.split('\n')[0].strip()
-    
-    # 4. Remove common wrong prefixes
-    wrong_prefixes = ['this paper belongs to category:', 'paper:', 'title:', 'category:', '##']
-    for prefix in wrong_prefixes:
-        if cleaned_text.lower().startswith(prefix):
-            cleaned_text = cleaned_text[len(prefix):].strip()
-    
-    # 5. If still has extra text, try to extract just the category name
-    # Categories are usually single words or words connected with underscores
-    # Look for a token that looks like a category (contains underscore or is capitalized)
-    if ' ' in cleaned_text:
-        tokens = cleaned_text.split()
-        # Try to find first token that looks like a category
-        for token in tokens:
-            if '_' in token or (token[0].isupper() and len(token) > 2):
-                cleaned_text = token
-                break
-        # If no good token found, just take first one
-        if ' ' in cleaned_text:
-            cleaned_text = tokens[0]
-    
-    # 6. Remove trailing punctuation
-    cleaned_text = cleaned_text.rstrip('.,!?:;')
-
-    return cleaned_text
-
 def generate_predictions(
     model: GWM_E,
     test_dataset: GWMDataset,
@@ -129,6 +86,28 @@ def generate_predictions(
     
     return predictions
 
+def parse_prediction(pred_text):
+    """
+    Parse prediction text to extract yes/no answer.
+    Handles various formats from LLM output.
+    """
+    pred_lower = pred_text.lower().strip()
+    
+    # Remove common prefixes
+    pred_lower = pred_lower.replace('assistant', '').strip()
+    pred_lower = pred_lower.replace('\n', '').strip()
+    
+    # Check for yes/no
+    if 'yes' in pred_lower and 'no' not in pred_lower:
+        return 'yes'
+    elif 'no' in pred_lower and 'yes' not in pred_lower:
+        return 'no'
+    elif pred_lower.startswith('yes'):
+        return 'yes'
+    elif pred_lower.startswith('no'):
+        return 'no'
+    else:
+        return 'no'
 
 def evaluate_predictions(predictions: list, label_names: list = None) -> dict:
     """
@@ -153,20 +132,13 @@ def evaluate_predictions(predictions: list, label_names: list = None) -> dict:
         gt = pred_dict['ground_truth']
         
         # Normalize strings
-        pred_normalized = pred.strip().lower()
+        pred_normalized = parse_prediction(pred)
         gt_normalized = gt.strip().lower()
         
         # Try multiple matching strategies
         is_correct = False
         
-        # 1. Exact match
         if pred_normalized == gt_normalized:
-            is_correct = True
-        # 2. Check if ground truth is contained in prediction (handles extra text)
-        elif gt_normalized in pred_normalized:
-            is_correct = True
-        # 3. Check if prediction starts with ground truth (handles trailing text)
-        elif pred_normalized.startswith(gt_normalized):
             is_correct = True
         
         if is_correct:
