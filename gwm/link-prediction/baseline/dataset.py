@@ -1,5 +1,5 @@
 """
-Dataset loader for GWM-E training and inference.
+Dataset loader for GWM training and inference.
 
 Loads:
 1. Multi-hop graph embeddings (pre-computed)
@@ -16,7 +16,7 @@ import os
 
 class GWMDataset(Dataset):
     """
-    Dataset for GWM-E model training.
+    Dataset for GWM model training.
     
     Loads pre-computed multi-hop embeddings and conversation data.
     """

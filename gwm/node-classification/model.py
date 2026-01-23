@@ -1,5 +1,5 @@
 """
-GWM-E (Embedding-based) Model Architecture
+GWM (Embedding-based) Model Architecture
 
 This implements the Graph World Model with embedding-based graph encoding:
 1. BERT encoder for node text features
@@ -43,9 +43,9 @@ class GraphProjector(nn.Module):
         return projected.view(batch_size, num_hops, -1)
 
 
-class GWM_E(nn.Module):
+class GWM(nn.Module):
     """
-    GWM-E: Graph World Model with Embedding-based architecture.
+    GWM: Graph World Model with Embedding-based architecture.
     
     Architecture:
     1. Load pre-computed multi-hop graph embeddings (from BERT + GNN)

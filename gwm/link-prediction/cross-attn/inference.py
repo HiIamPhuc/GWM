@@ -1,5 +1,5 @@
 """
-Inference and evaluation script for GWM-E model.
+Inference and evaluation script for GWM model.
 
 Generates predictions for test data and calculates metrics.
 """
@@ -13,11 +13,11 @@ from pathlib import Path
 from collections import defaultdict
 import numpy as np
 
-from model import GWM_E
+from model import GWM
 from dataset import GWMDataset
 
 def generate_predictions(
-    model: GWM_E,
+    model: GWM,
     test_dataset: GWMDataset,
     device: str = 'cuda',
     max_new_tokens: int = 50,
@@ -167,7 +167,7 @@ def evaluate_predictions(predictions: list, label_names: list = None) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate GWM-E model")
+    parser = argparse.ArgumentParser(description="Evaluate GWM model")
     
     # Model arguments
     parser.add_argument("--llama_model", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct",
@@ -208,8 +208,8 @@ def main():
     print(f"Using device: {device}")
     
     # Initialize model
-    print("Loading GWM-E model...")
-    model = GWM_E(
+    print("Loading GWM model...")
+    model = GWM(
         llama_model_path=args.llama_model,
         graph_embedding_dim=args.graph_embedding_dim,
         projector_hidden_dim=args.projector_hidden_dim,

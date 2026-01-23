@@ -1,10 +1,10 @@
-# GWM-E: Graph World Model - Embedding-based Architecture
+# GWM: Graph World Model - Embedding-based Architecture
 
-Implementation of the GWM-E architecture from the "Graph World Model" paper for graph prediction tasks.
+Implementation of the GWM architecture from the "Graph World Model" paper for graph prediction tasks.
 
 ## Architecture Overview
 
-GWM-E treats graph prediction as a "World Prediction" problem using:
+GWM treats graph prediction as a "World Prediction" problem using:
 
 1. **BERT Encoder**: Converts node text features to embeddings
 2. **Graph Neural Network**: Multi-hop neighborhood aggregation (parameter-free)
@@ -14,8 +14,8 @@ GWM-E treats graph prediction as a "World Prediction" problem using:
 ## Project Structure
 
 ```
-gwm_e/
-├── model.py          # GWM-E model architecture
+gwm/
+├── model.py          # GWM model architecture
 ├── dataset.py        # Data loader for JSONL conversations
 ├── train.py          # Training script with prefix tuning
 ├── inference.py      # Evaluation and prediction generation
@@ -48,7 +48,7 @@ multi_modal_data/traditional_graph/cora/
 ### 2. Install Dependencies
 
 ```bash
-cd gwm_e
+cd gwm
 pip install -r requirements.txt
 ```
 
@@ -144,7 +144,7 @@ Each training example consists of:
 
 2. Update model config:
    ```python
-   model = GWM_E(
+   model = GWM(
        num_hops=5,           # Adjust based on graph diameter
        graph_embedding_dim=2048,  # Match your embeddings
    )

@@ -1,5 +1,5 @@
 """
-Training utility functions for GWM-E Link Prediction.
+Training utility functions for GWM Link Prediction.
 Includes training loop, evaluation, and checkpoint management.
 """
 
@@ -29,7 +29,7 @@ def train_epoch(
     Train model for one epoch.
     
     Args:
-        model: GWM_E model
+        model: GWM model
         train_loader: DataLoader for training data
         optimizer: Optimizer
         scheduler: Learning rate scheduler
@@ -138,7 +138,7 @@ def evaluate(
     Evaluate model using text generation.
     
     Args:
-        model: GWM_E model
+        model: GWM model
         test_dataset: Dataset to evaluate on
         device: Device to evaluate on
         max_new_tokens: Maximum tokens to generate
@@ -185,7 +185,7 @@ def save_checkpoint(
     Save model checkpoint and training state.
     
     Args:
-        model: GWM_E model
+        model: GWM model
         epoch: Current epoch
         train_loss: Training loss
         val_accuracy: Validation accuracy
@@ -223,7 +223,7 @@ def load_checkpoint(
     Load checkpoint and training state.
     
     Args:
-        model: GWM_E model to load weights into
+        model: GWM model to load weights into
         checkpoint_dir: Directory containing checkpoint
     
     Returns:

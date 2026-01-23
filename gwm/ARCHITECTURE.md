@@ -1,10 +1,10 @@
-# GWM-E Architecture Overview
+# GWM Architecture Overview
 
 ## System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         GWM-E PIPELINE                              │
+│                         GWM PIPELINE                              │
 └─────────────────────────────────────────────────────────────────────┘
 
 OFFLINE PREPROCESSING (process.ipynb)
@@ -244,7 +244,7 @@ Per-Class Performance (example):
 └─ ...
 ```
 
-## Comparison: GWM-E vs Traditional GNNs
+## Comparison: GWM vs Traditional GNNs
 
 ```
 Traditional GNN (e.g., GCN):
@@ -254,7 +254,7 @@ Traditional GNN (e.g., GCN):
 ├─ Training: End-to-end supervised
 └─ Weakness: Limited to structured features
 
-GWM-E:
+GWM:
 ├─ Input: Text descriptions + graph structure
 ├─ Encoder: BERT (captures semantic meaning)
 ├─ Graph: Multi-hop aggregation (parameter-free)
@@ -263,7 +263,7 @@ GWM-E:
 └─ Strength: Leverages LLM knowledge + text semantics
 ```
 
-## Advantages of GWM-E
+## Advantages of GWM
 
 1. **Text Understanding**: BERT captures semantic meaning of node text
 2. **LLM Reasoning**: LLaMA provides zero-shot reasoning capabilities
@@ -276,7 +276,7 @@ GWM-E:
 
 ```
 model.py
-├─ GWM_E class
+├─ GWM class
 ├─ GraphProjector class
 ├─ forward() method
 └─ generate() method

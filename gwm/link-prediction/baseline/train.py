@@ -1,5 +1,5 @@
 """
-Command-line training script for GWM-E Link Prediction (Baseline - Flatten Architecture).
+Command-line training script for GWM Link Prediction (Baseline - Flatten Architecture).
 Supports training from scratch or resuming from checkpoint.
 
 Usage:
@@ -28,7 +28,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import get_linear_schedule_with_warmup
 
-from model import GWM_E
+from model import GWM
 from dataset import GWMDataset
 from utils import (
     train_epoch,
@@ -53,7 +53,7 @@ def set_seed(seed: int = 42):
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description='Train GWM-E Baseline model (flatten architecture) for link prediction',
+        description='Train GWM Baseline model (flatten architecture) for link prediction',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
@@ -133,7 +133,7 @@ def parse_args():
 def print_config(args: argparse.Namespace):
     """Print configuration."""
     print("\n" + "="*70)
-    print(" "*10 + "GWM-E BASELINE LINK PREDICTION TRAINING")
+    print(" "*10 + "GWM BASELINE LINK PREDICTION TRAINING")
     print("="*70)
     
     if args.resume:
@@ -209,7 +209,7 @@ def main():
         torch.cuda.empty_cache()
         gc.collect()
     
-    model = GWM_E(
+    model = GWM(
         llama_model_path=args.llama_model,
         graph_embedding_dim=args.graph_embedding_dim,
         projector_hidden_dim=args.projector_hidden_dim,

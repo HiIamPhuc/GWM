@@ -1,4 +1,4 @@
-# GWM-E Requirements
+# GWM Requirements
 
 # Core dependencies
 torch>=2.0.0
