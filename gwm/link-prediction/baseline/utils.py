@@ -5,6 +5,7 @@ Includes training loop, evaluation, and checkpoint management.
 
 import os
 import json
+import time
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -41,8 +42,9 @@ def train_epoch(
         verbose: Whether to show progress bar
     
     Returns:
-        Average training loss for the epoch
+        Tuple of (average training loss, epoch time in seconds)
     """
+    epoch_start_time = time.time()
     model.train()
     total_loss = 0
     num_batches = 0
@@ -122,8 +124,9 @@ def train_epoch(
     if nan_count > 0 and verbose:
         print(f"\n⚠️  Skipped {nan_count} batches due to NaN/Inf loss")
     
+    epoch_time = time.time() - epoch_start_time
     avg_loss = total_loss / num_batches if num_batches > 0 else float('nan')
-    return avg_loss
+    return avg_loss, epoch_time
 
 
 def evaluate(

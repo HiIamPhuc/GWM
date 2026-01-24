@@ -341,7 +341,7 @@ def main():
         print(f"{'='*70}")
         
         # Train
-        train_loss = train_epoch(
+        train_loss, epoch_time = train_epoch(
             model=model,
             train_loader=train_loader,
             optimizer=optimizer,
@@ -371,13 +371,16 @@ def main():
             torch.cuda.empty_cache()
         
         # Log results
-        print(f"Results: Train Loss={train_loss:.4f} | Val Acc={val_accuracy:.4f} ({val_accuracy*100:.2f}%)")
+        epoch_mins = int(epoch_time // 60)
+        epoch_secs = int(epoch_time % 60)
+        print(f"Results: Train Loss={train_loss:.4f} | Val Acc={val_accuracy:.4f} ({val_accuracy*100:.2f}%) | Time={epoch_mins}m {epoch_secs}s")
         
         # Update history
         training_history.append({
             'epoch': epoch,
             'train_loss': train_loss,
             'val_accuracy': val_accuracy,
+            'epoch_time': epoch_time,
         })
         
         # Save history
