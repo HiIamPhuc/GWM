@@ -16,6 +16,7 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 import json
+import pandas as pd
 
 from model import GWMRNN
 from dataset import load_datasets, create_dataloaders
@@ -35,7 +36,9 @@ def parse_args():
     parser.add_argument('--batch_size', type=int, default=1024,
                         help='Batch size for inference')
     parser.add_argument('--output_file', type=str, default='predictions.json',
-                        help='Output file for predictions')
+                        help='Output file for predictions (JSON format)')
+    parser.add_argument('--save_csv', action='store_true',
+                        help='Also save predictions in CSV format')
     
     return parser.parse_args()
 
@@ -144,6 +147,20 @@ def main():
         json.dump(output_data, f, indent=2)
     
     print(f"\n✓ Saved predictions to: {args.output_file}")
+    
+    # Save CSV if requested
+    if args.save_csv:
+        csv_path = output_path.with_suffix('.csv')
+        df = pd.DataFrame({
+            'index': range(len(predictions)),
+            'prediction': predictions,
+            'true_label': labels,
+            'prob_class_0': probabilities[:, 0],
+            'prob_class_1': probabilities[:, 1],
+            'correct': predictions == labels
+        })
+        df.to_csv(csv_path, index=False)
+        print(f"✓ Saved CSV to: {csv_path}")
     
     # Print sample predictions
     print(f"\nSample Predictions (first 10):")

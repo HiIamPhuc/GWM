@@ -23,6 +23,7 @@ import numpy as np
 from pathlib import Path
 import json
 import time
+import pandas as pd
 
 from model import create_gwm_rnn
 from dataset import load_datasets, load_metadata, create_dataloaders
@@ -129,7 +130,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, max_grad_norm):
 
 
 @torch.no_grad()
-def evaluate(model, dataloader, criterion, device):
+def evaluate(model, dataloader, criterion, device, return_predictions=False):
     """Evaluate model."""
     model.eval()
     
@@ -157,13 +158,19 @@ def evaluate(model, dataloader, criterion, device):
         all_probabilities.extend(probs.cpu().numpy())
     
     # Calculate metrics
+    predictions_array = np.array(all_predictions)
+    labels_array = np.array(all_labels)
+    probabilities_array = np.array(all_probabilities)
+    
     metrics = calculate_metrics(
-        np.array(all_predictions),
-        np.array(all_labels),
-        np.array(all_probabilities)
+        predictions_array,
+        labels_array,
+        probabilities_array
     )
     metrics['loss'] = loss_meter.avg
     
+    if return_predictions:
+        return metrics, predictions_array, labels_array, probabilities_array
     return metrics
 
 
@@ -344,7 +351,10 @@ def main():
     if best_checkpoint.exists():
         load_checkpoint(str(best_checkpoint), model)
     
-    test_metrics = evaluate(model, dataloaders['test'], criterion, device)
+    # Get predictions for CSV export
+    test_metrics, predictions, labels, probabilities = evaluate(
+        model, dataloaders['test'], criterion, device, return_predictions=True
+    )
     
     print(f"\nTest Results:")
     print(f"  Accuracy: {test_metrics['accuracy']:.4f}")
@@ -353,9 +363,31 @@ def main():
     print(f"  F1: {test_metrics['f1']:.4f}")
     print(f"  AUC: {test_metrics['auc']:.4f}")
     
-    # Save test results
+    # Save test results (JSON)
     with open(output_dir / 'test_results.json', 'w') as f:
         json.dump(test_metrics, f, indent=2)
+    
+    # Save test predictions (CSV)
+    df_test = pd.DataFrame({
+        'index': range(len(predictions)),
+        'prediction': predictions,
+        'true_label': labels,
+        'prob_class_0': probabilities[:, 0],
+        'prob_class_1': probabilities[:, 1],
+        'correct': predictions == labels
+    })
+    csv_path = output_dir / 'test_predictions.csv'
+    df_test.to_csv(csv_path, index=False)
+    print(f"\n✓ Saved test predictions to: {csv_path}")
+    
+    # Save summary statistics
+    summary_df = df_test.groupby('true_label').agg({
+        'correct': ['count', 'sum', 'mean']
+    }).round(4)
+    summary_df.columns = ['total', 'correct_predictions', 'accuracy']
+    summary_path = output_dir / 'test_summary.csv'
+    summary_df.to_csv(summary_path)
+    print(f"✓ Saved test summary to: {summary_path}")
     
     print(f"\n{'='*70}")
     print("Training Complete!")
