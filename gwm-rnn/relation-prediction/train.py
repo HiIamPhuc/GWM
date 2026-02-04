@@ -149,8 +149,7 @@ def main(args):
         optimizer,
         mode='max',
         factor=0.5,
-        patience=args.scheduler_patience,
-        verbose=True
+        patience=args.scheduler_patience
     )
     
     # Early stopping
