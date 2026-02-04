@@ -184,14 +184,14 @@ def load_kg_data(data_dir: str, device: str = 'cpu'):
     """
     data_dir = Path(data_dir)
     
-    # Load embeddings
-    entity_embeddings = torch.load(data_dir / 'entity_embeddings.pt', map_location=device)
-    relation_embeddings = torch.load(data_dir / 'relation_embeddings.pt', map_location=device)
+    # Load embeddings on CPU (move to device later in training loop to avoid multiprocessing issues)
+    entity_embeddings = torch.load(data_dir / 'entity_embeddings.pt', map_location='cpu')
+    relation_embeddings = torch.load(data_dir / 'relation_embeddings.pt', map_location='cpu')
     
-    # Load triples
-    train_triples = torch.load(data_dir / 'train_triples.pt', map_location=device)
-    valid_triples = torch.load(data_dir / 'valid_triples.pt', map_location=device)
-    test_triples = torch.load(data_dir / 'test_triples.pt', map_location=device)
+    # Load triples on CPU
+    train_triples = torch.load(data_dir / 'train_triples.pt', map_location='cpu')
+    valid_triples = torch.load(data_dir / 'valid_triples.pt', map_location='cpu')
+    test_triples = torch.load(data_dir / 'test_triples.pt', map_location='cpu')
     
     # Load vocabularies
     with open(data_dir / 'entity2id.json', 'r') as f:

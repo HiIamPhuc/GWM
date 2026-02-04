@@ -39,11 +39,11 @@ def train_one_epoch(
     
     progress_bar = tqdm(train_loader, desc="Training")
     for batch in progress_bar:
-        # Move data to device
-        head_emb = batch['head_emb'].to(device)
-        relation_emb = batch['relation_emb'].to(device)
-        positive_tail_emb = batch['positive_tail_emb'].to(device)
-        negative_tail_embs = batch['negative_tail_embs'].to(device)
+        # Move data to device (tensors loaded on CPU to avoid multiprocessing issues)
+        head_emb = batch['head_emb'].to(device, non_blocking=True)
+        relation_emb = batch['relation_emb'].to(device, non_blocking=True)
+        positive_tail_emb = batch['positive_tail_emb'].to(device, non_blocking=True)
+        negative_tail_embs = batch['negative_tail_embs'].to(device, non_blocking=True)
         
         # Forward pass
         predicted_tail, _ = model(head_emb, relation_emb)
