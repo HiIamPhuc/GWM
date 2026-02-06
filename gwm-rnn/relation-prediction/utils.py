@@ -10,8 +10,11 @@ Implements ranking metrics:
 import torch
 import torch.nn.functional as F
 import numpy as np
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from tqdm import tqdm
+import pandas as pd
+import json
+from pathlib import Path
 
 
 def compute_ranks(
@@ -19,7 +22,9 @@ def compute_ranks(
     dataloader,
     all_entity_embeddings: torch.Tensor,
     device: str = 'cuda',
-    filtered: bool = True
+    filtered: bool = True,
+    save_predictions: Optional[str] = None,
+    entity2id: Optional[Dict] = None
 ) -> Dict[str, float]:
     """
     Compute ranking metrics for knowledge graph completion.
@@ -43,7 +48,13 @@ def compute_ranks(
     model.eval()
     
     all_ranks = []
+    predictions_data = []  # Store predictions if requested
     all_entity_embeddings = all_entity_embeddings.to(device)
+    
+    # Create reverse mapping if saving predictions
+    id2entity = None
+    if save_predictions and entity2id:
+        id2entity = {v: k for k, v in entity2id.items()}
     
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating"):
@@ -79,6 +90,33 @@ def compute_ranks(
                 # Find position of true tail in sorted list
                 rank = (sorted_indices[i] == true_tail).nonzero(as_tuple=True)[0].item()
                 all_ranks.append(rank + 1)  # Rank is 1-indexed
+                
+                # Store prediction details if requested
+                if save_predictions:
+                    head_id = batch['head_id'][i].item() if torch.is_tensor(batch['head_id'][i]) else batch['head_id'][i]
+                    relation_id = batch['relation_id'][i].item() if torch.is_tensor(batch['relation_id'][i]) else batch['relation_id'][i]
+                    
+                    # Get top-10 predictions
+                    top10_ids = sorted_indices[i][:10].cpu().tolist()
+                    top10_scores = similarities[i][sorted_indices[i][:10]].cpu().tolist()
+                    
+                    pred_entry = {
+                        'head_id': head_id,
+                        'relation_id': relation_id,
+                        'true_tail_id': true_tail,
+                        'rank': rank + 1,
+                        'reciprocal_rank': 1.0 / (rank + 1),
+                        'top10_predicted_ids': top10_ids,
+                        'top10_scores': top10_scores
+                    }
+                    
+                    # Add entity names if available
+                    if id2entity:
+                        pred_entry['head'] = id2entity.get(head_id, f'entity_{head_id}')
+                        pred_entry['true_tail'] = id2entity.get(true_tail, f'entity_{true_tail}')
+                        pred_entry['top10_predicted'] = [id2entity.get(eid, f'entity_{eid}') for eid in top10_ids]
+                    
+                    predictions_data.append(pred_entry)
     
     # Compute metrics
     all_ranks = np.array(all_ranks)
@@ -91,6 +129,12 @@ def compute_ranks(
         'Hits@10': float(np.mean(all_ranks <= 10)),
         'Hits@50': float(np.mean(all_ranks <= 50)),
     }
+    
+    # Save predictions if path provided
+    if save_predictions and predictions_data:
+        with open(save_predictions, 'w') as f:
+            json.dump(predictions_data, f, indent=2)
+        print(f"✓ Saved {len(predictions_data)} predictions to {save_predictions}")
     
     return metrics
 
@@ -207,6 +251,115 @@ def save_checkpoint(
         'optimizer_state_dict': optimizer.state_dict(),
         'metrics': metrics,
     }, save_path)
+
+
+def plot_training_curves(history: Dict, output_path: str, config: Dict = None):
+    """Plot and save training curves."""
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib
+        matplotlib.use('Agg')  # Use non-interactive backend
+    except ImportError:
+        print("Warning: matplotlib not available, skipping plots")
+        return
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle('Training History', fontsize=14, fontweight='bold')
+    
+    epochs = range(1, len(history['train_loss']) + 1)
+    
+    # 1. Training Loss
+    ax1 = axes[0, 0]
+    ax1.plot(epochs, history['train_loss'], 'b-', linewidth=2, label='Train Loss')
+    ax1.set_xlabel('Epoch', fontweight='bold')
+    ax1.set_ylabel('Loss', fontweight='bold')
+    ax1.set_title('Training Loss', fontweight='bold')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend()
+    
+    # 2. Validation MRR
+    ax2 = axes[0, 1]
+    ax2.plot(epochs, history['val_mrr'], 'g-', linewidth=2, label='Validation MRR')
+    if 'val_mrr' in history and history['val_mrr']:
+        best_mrr_idx = np.argmax(history['val_mrr'])
+        ax2.axvline(x=best_mrr_idx + 1, color='r', linestyle='--', alpha=0.7, label=f'Best Epoch ({best_mrr_idx + 1})')
+        ax2.scatter([best_mrr_idx + 1], [history['val_mrr'][best_mrr_idx]], color='r', s=100, zorder=5)
+    ax2.set_xlabel('Epoch', fontweight='bold')
+    ax2.set_ylabel('MRR', fontweight='bold')
+    ax2.set_title('Validation MRR', fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend()
+    
+    # 3. Validation Hits@10
+    ax3 = axes[1, 0]
+    ax3.plot(epochs, history['val_hits@10'], 'orange', linewidth=2, label='Validation Hits@10')
+    ax3.set_xlabel('Epoch', fontweight='bold')
+    ax3.set_ylabel('Hits@10', fontweight='bold')
+    ax3.set_title('Validation Hits@10', fontweight='bold')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend()
+    
+    # 4. Mean Rank
+    ax4 = axes[1, 1]
+    ax4.plot(epochs, history['val_mr'], 'purple', linewidth=2, label='Validation MR')
+    ax4.set_xlabel('Epoch', fontweight='bold')
+    ax4.set_ylabel('Mean Rank (lower is better)', fontweight='bold')
+    ax4.set_title('Validation Mean Rank', fontweight='bold')
+    ax4.grid(True, alpha=0.3)
+    ax4.legend()
+    
+    # Add config info if provided
+    if config:
+        config_text = f"Hidden: {config.get('hidden_dim', 'N/A')} | Layers: {config.get('num_lstm_layers', 'N/A')} | Pooling: {config.get('pooling', 'N/A')}\n"
+        config_text += f"LR: {config.get('learning_rate', 'N/A')} | Batch: {config.get('batch_size', 'N/A')} | Loss: {config.get('loss', 'N/A')}"
+        fig.text(0.5, 0.02, config_text, ha='center', fontsize=9, style='italic')
+    
+    plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"✓ Saved training curves to {output_path}")
+
+
+def update_summary_csv(output_base_dir: str, experiment_name: str, config: Dict, test_results: Dict, training_time: float):
+    """Update or create summary CSV file with experiment results."""
+    summary_path = Path(output_base_dir) / 'training_summary.csv'
+    
+    # Create new row
+    new_row = {
+        'experiment': experiment_name,
+        'pooling': config.get('pooling', 'unknown'),
+        'hidden_dim': config.get('hidden_dim', 0),
+        'num_layers': config.get('num_lstm_layers', 0),
+        'dropout': config.get('dropout', 0),
+        'loss': config.get('loss', 'unknown'),
+        'learning_rate': config.get('learning_rate', 0),
+        'batch_size': config.get('batch_size', 0),
+        'num_negatives': config.get('num_negatives', 0),
+        'best_epoch': test_results.get('best_epoch', 0),
+        'best_val_mrr': test_results.get('best_val_mrr', 0),
+        'test_mrr': test_results['test_metrics'].get('MRR', 0),
+        'test_mr': test_results['test_metrics'].get('MR', 0),
+        'test_hits@1': test_results['test_metrics'].get('Hits@1', 0),
+        'test_hits@3': test_results['test_metrics'].get('Hits@3', 0),
+        'test_hits@10': test_results['test_metrics'].get('Hits@10', 0),
+        'test_hits@50': test_results['test_metrics'].get('Hits@50', 0),
+        'training_time_sec': training_time,
+        'model_params': config.get('model_params', 0)
+    }
+    
+    # Load existing CSV or create new DataFrame
+    if summary_path.exists():
+        df = pd.read_csv(summary_path)
+        # Remove existing entry for this experiment if it exists
+        df = df[df['experiment'] != experiment_name]
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    else:
+        df = pd.DataFrame([new_row])
+    
+    # Save updated CSV
+    df.to_csv(summary_path, index=False)
+    print(f"✓ Updated summary CSV: {summary_path}")
+
 
 
 def load_checkpoint(

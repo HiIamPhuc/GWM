@@ -20,7 +20,9 @@ from tqdm import tqdm
 
 from model import GWM_RNN, InfoNCELoss, MarginRankingLoss
 from dataset import load_kg_data, create_dataloaders
-from utils import compute_ranks, evaluate_epoch, format_metrics, EarlyStopping, save_checkpoint
+from utils import (compute_ranks, evaluate_epoch, format_metrics, 
+                   EarlyStopping, save_checkpoint, plot_training_curves, 
+                   update_summary_csv)
 
 
 def train_one_epoch(
@@ -281,7 +283,9 @@ def main(args):
         dataloader=test_loader,
         all_entity_embeddings=data_dict['entity_embeddings'],
         device=device,
-        filtered=True
+        filtered=True,
+        save_predictions=str(output_dir / 'test_predictions.json'),
+        entity2id=data_dict.get('entity2id')
     )
     
     print(format_metrics(test_metrics, "Test Results (Filtered)"))
@@ -296,6 +300,31 @@ def main(args):
     with open(output_dir / 'test_results.json', 'w') as f:
         json.dump(test_results, f, indent=2)
     
+    # Calculate total training time
+    total_training_time = sum(history['epoch_times'])
+    
+    # Plot and save training curves
+    print("\nGenerating training curves...")
+    plot_training_curves(
+        history=history,
+        output_path=str(output_dir / 'training_curves.png'),
+        config=config
+    )
+    
+    # Update summary CSV (get parent directory of output_dir for base)
+    # Extract experiment name from output path (e.g., "standard/last-pooling")
+    experiment_name = f"{config['pooling']}-pooling"
+    output_base = output_dir.parent.parent  # Go up two levels to get base experiments dir
+    
+    print("\nUpdating summary CSV...")
+    update_summary_csv(
+        output_base_dir=str(output_base),
+        experiment_name=experiment_name,
+        config=config,
+        test_results=test_results,
+        training_time=total_training_time
+    )
+    
     print("="*70)
     print("TRAINING COMPLETE")
     print("="*70)
@@ -303,7 +332,12 @@ def main(args):
     print(f"Best validation MRR: {best_mrr:.4f}")
     print(f"Test MRR: {test_metrics['MRR']:.4f}")
     print(f"Test Hits@10: {test_metrics['Hits@10']:.4f} ({test_metrics['Hits@10']*100:.2f}%)")
-    print(f"Results saved to: {output_dir}")
+    print(f"Total training time: {total_training_time/60:.1f} min ({total_training_time/3600:.2f} hours)")
+    print(f"\nResults saved to: {output_dir}")
+    print(f"  • Model checkpoints: checkpoint_best.pt, checkpoint_last.pt")
+    print(f"  • Test predictions: test_predictions.json")
+    print(f"  • Training curves: training_curves.png")
+    print(f"  • Summary updated: {output_base / 'training_summary.csv'}")
     print("="*70)
 
 
