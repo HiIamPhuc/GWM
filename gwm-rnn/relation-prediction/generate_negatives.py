@@ -22,6 +22,8 @@ def main():
     parser = argparse.ArgumentParser(description="Generate fixed negative samples for KG completion")
     parser.add_argument('--data_dir', type=str, required=True,
                        help='Directory with processed KG data')
+    parser.add_argument('--output_dir', type=str, default=None,
+                       help='Directory to save generated negatives (defaults to data_dir)')
     parser.add_argument('--num_negatives', type=int, default=10,
                        help='Number of negative samples per positive triple')
     parser.add_argument('--seed', type=int, default=42,
@@ -32,6 +34,7 @@ def main():
     args = parser.parse_args()
     
     data_dir = Path(args.data_dir)
+    output_dir = Path(args.output_dir) if args.output_dir else data_dir
     
     if not data_dir.exists():
         raise ValueError(f"Data directory not found: {data_dir}")
@@ -40,6 +43,7 @@ def main():
     print("GENERATING FIXED NEGATIVE SAMPLES")
     print("="*70)
     print(f"Data directory: {data_dir}")
+    print(f"Output directory: {output_dir}")
     print(f"Num negatives: {args.num_negatives}")
     print(f"Random seed: {args.seed}")
     print()
@@ -69,7 +73,7 @@ def main():
         print(f"✓ Number of entities (from entity2id): {num_entities:,}")
     
     # Check if negatives already exist
-    output_path = data_dir / 'train_negatives.pt'
+    output_path = output_dir / 'train_negatives.pt'
     if output_path.exists() and not args.force:
         print(f"\n⚠️  Fixed negatives already exist at: {output_path}")
         print(f"   Use --force to overwrite")

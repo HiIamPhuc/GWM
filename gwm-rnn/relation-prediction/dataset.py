@@ -266,14 +266,23 @@ def load_kg_data(data_dir: str, device: str = 'cpu'):
         relation2id = json.load(f)
     
     # Load fixed negatives if available
-    train_negatives_path = data_dir / 'train_negatives.pt'
+    # Check working directory first (for Kaggle), then data_dir
     train_negatives = None
-    if train_negatives_path.exists():
+    working_dir_negatives = Path('/kaggle/working/train_negatives.pt')
+    train_negatives_path = data_dir / 'train_negatives.pt'
+    
+    if working_dir_negatives.exists():
+        print(f"Loading pre-generated fixed negatives from {working_dir_negatives}")
+        train_negatives = torch.load(working_dir_negatives, map_location='cpu')
+        print(f"✓ Loaded fixed negatives: {train_negatives.shape}")
+    elif train_negatives_path.exists():
         print(f"Loading pre-generated fixed negatives from {train_negatives_path}")
         train_negatives = torch.load(train_negatives_path, map_location='cpu')
         print(f"✓ Loaded fixed negatives: {train_negatives.shape}")
     else:
         print(f"⚠ No fixed negatives found at {train_negatives_path}")
+        if working_dir_negatives.parent.exists():
+            print(f"  Also checked: {working_dir_negatives}")
         print(f"  Negatives will be sampled on-the-fly (may cause variance across runs)")
         print(f"  To generate fixed negatives, see dataset.generate_fixed_negatives()")
     
