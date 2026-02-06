@@ -13,6 +13,58 @@ from pathlib import Path
 import json
 from typing import Dict, List, Tuple, Optional
 
+def generate_fixed_negatives(
+    triples: torch.Tensor,
+    num_entities: int,
+    num_negatives: int = 10,
+    seed: int = 42,
+    save_path: Optional[str] = None
+) -> torch.Tensor:
+    """
+    Pre-generate fixed negative samples for all training triples.
+    
+    This ensures all model variants use the same negative samples,
+    making comparisons more fair and reducing variance.
+    
+    Args:
+        triples: [num_triples, 3] tensor of (head, relation, tail)
+        num_entities: Total number of entities
+        num_negatives: Number of negatives per positive
+        seed: Random seed for reproducibility
+        save_path: If provided, save negatives to this path
+        
+    Returns:
+        negatives: [num_triples, num_negatives] tensor of negative tail IDs
+    """
+    print(f"Generating fixed negative samples (seed={seed})...")
+    np.random.seed(seed)
+    
+    num_triples = len(triples)
+    negatives = torch.zeros(num_triples, num_negatives, dtype=torch.long)
+    
+    for idx in range(num_triples):
+        h_id, r_id, t_id = triples[idx]
+        t_id = t_id.item() if isinstance(t_id, torch.Tensor) else t_id
+        
+        negative_ids = []
+        while len(negative_ids) < num_negatives:
+            neg_id = np.random.randint(0, num_entities)
+            # Avoid sampling the true tail
+            if neg_id != t_id:
+                negative_ids.append(neg_id)
+        
+        negatives[idx] = torch.tensor(negative_ids, dtype=torch.long)
+        
+        if (idx + 1) % 50000 == 0:
+            print(f"  Generated negatives for {idx + 1:,}/{num_triples:,} triples")
+    
+    if save_path:
+        torch.save(negatives, save_path)
+        print(f"✓ Saved fixed negatives to: {save_path}")
+    
+    print(f"✓ Generated {num_triples:,} × {num_negatives} negative samples")
+    return negatives
+
 
 class KGCompletionDataset(Dataset):
     """
@@ -28,7 +80,8 @@ class KGCompletionDataset(Dataset):
         entity_embeddings: torch.Tensor,
         relation_embeddings: torch.Tensor,
         num_negatives: int = 10,
-        mode: str = 'train'
+        mode: str = 'train',
+        fixed_negatives: Optional[torch.Tensor] = None
     ):
         """
         Args:
@@ -37,15 +90,24 @@ class KGCompletionDataset(Dataset):
             relation_embeddings: [num_relations, embedding_dim]
             num_negatives: Number of negative samples per positive
             mode: 'train', 'valid', or 'test'
+            fixed_negatives: [num_triples, num_negatives] pre-sampled negatives (optional)
         """
         self.triples = triples
         self.entity_embeddings = entity_embeddings
         self.relation_embeddings = relation_embeddings
         self.num_negatives = num_negatives
         self.mode = mode
+        self.fixed_negatives = fixed_negatives
         
         self.num_entities = entity_embeddings.size(0)
         self.num_relations = relation_embeddings.size(0)
+        
+        # Validate fixed negatives if provided
+        if fixed_negatives is not None:
+            assert len(fixed_negatives) == len(triples), \
+                f"Fixed negatives length {len(fixed_negatives)} != triples length {len(triples)}"
+            assert fixed_negatives.size(1) == num_negatives, \
+                f"Fixed negatives has {fixed_negatives.size(1)} negatives, expected {num_negatives}"
         
     def __len__(self):
         return len(self.triples)
@@ -70,7 +132,11 @@ class KGCompletionDataset(Dataset):
         
         # Generate negative samples (corrupt tail only)
         if self.mode == 'train':
-            negative_tail_ids = self._sample_negatives(h_id, r_id, t_id)
+            # Use fixed negatives if available, otherwise sample on-the-fly
+            if self.fixed_negatives is not None:
+                negative_tail_ids = self.fixed_negatives[idx]
+            else:
+                negative_tail_ids = self._sample_negatives(h_id, r_id, t_id)
             negative_tail_embs = self.entity_embeddings[negative_tail_ids]
         else:
             # For validation/test, we'll do full ranking, so no negatives needed during data loading
@@ -199,6 +265,18 @@ def load_kg_data(data_dir: str, device: str = 'cpu'):
     with open(data_dir / 'relation2id.json', 'r') as f:
         relation2id = json.load(f)
     
+    # Load fixed negatives if available
+    train_negatives_path = data_dir / 'train_negatives.pt'
+    train_negatives = None
+    if train_negatives_path.exists():
+        print(f"Loading pre-generated fixed negatives from {train_negatives_path}")
+        train_negatives = torch.load(train_negatives_path, map_location='cpu')
+        print(f"✓ Loaded fixed negatives: {train_negatives.shape}")
+    else:
+        print(f"⚠ No fixed negatives found at {train_negatives_path}")
+        print(f"  Negatives will be sampled on-the-fly (may cause variance across runs)")
+        print(f"  To generate fixed negatives, see dataset.generate_fixed_negatives()")
+    
     # Load ground truth (for filtered evaluation)
     ground_truth = None
     if (data_dir / 'ground_truth.json').exists():
@@ -220,6 +298,7 @@ def load_kg_data(data_dir: str, device: str = 'cpu'):
         'train_triples': train_triples,
         'valid_triples': valid_triples,
         'test_triples': test_triples,
+        'train_negatives': train_negatives,  # None if not pre-generated
         'entity2id': entity2id,
         'relation2id': relation2id,
         'ground_truth': ground_truth,
@@ -256,7 +335,8 @@ def create_dataloaders(
         entity_embeddings=data_dict['entity_embeddings'],
         relation_embeddings=data_dict['relation_embeddings'],
         num_negatives=num_negatives,
-        mode='train'
+        mode='train',
+        fixed_negatives=data_dict.get('train_negatives')  # Use fixed negatives if available
     )
     
     train_loader = DataLoader(
