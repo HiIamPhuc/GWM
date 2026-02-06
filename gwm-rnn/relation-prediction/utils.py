@@ -95,7 +95,8 @@ def compute_ranks(
                 if save_predictions:
                     head_id = batch['head_id'][i].item() if torch.is_tensor(batch['head_id'][i]) else batch['head_id'][i]
                     relation_id = batch['relation_id'][i].item() if torch.is_tensor(batch['relation_id'][i]) else batch['relation_id'][i]
-                    
+                    true_tail_id = true_tail.item() if torch.is_tensor(true_tail) else true_tail
+
                     # Get top-10 predictions
                     top10_ids = sorted_indices[i][:10].cpu().tolist()
                     top10_scores = similarities[i][sorted_indices[i][:10]].cpu().tolist()
@@ -103,7 +104,7 @@ def compute_ranks(
                     pred_entry = {
                         'head_id': head_id,
                         'relation_id': relation_id,
-                        'true_tail_id': true_tail,
+                        'true_tail_id': true_tail_id,
                         'rank': rank + 1,
                         'reciprocal_rank': 1.0 / (rank + 1),
                         'top10_predicted_ids': top10_ids,
@@ -113,7 +114,7 @@ def compute_ranks(
                     # Add entity names if available
                     if id2entity:
                         pred_entry['head'] = id2entity.get(head_id, f'entity_{head_id}')
-                        pred_entry['true_tail'] = id2entity.get(true_tail, f'entity_{true_tail}')
+                        pred_entry['true_tail'] = id2entity.get(true_tail_id, f'entity_{true_tail_id}')
                         pred_entry['top10_predicted'] = [id2entity.get(eid, f'entity_{eid}') for eid in top10_ids]
                     
                     predictions_data.append(pred_entry)
