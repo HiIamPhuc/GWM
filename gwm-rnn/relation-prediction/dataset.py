@@ -106,8 +106,17 @@ class KGCompletionDataset(Dataset):
         if fixed_negatives is not None:
             assert len(fixed_negatives) == len(triples), \
                 f"Fixed negatives length {len(fixed_negatives)} != triples length {len(triples)}"
-            assert fixed_negatives.size(1) == num_negatives, \
-                f"Fixed negatives has {fixed_negatives.size(1)} negatives, expected {num_negatives}"
+            
+            # Use subset of fixed negatives if more are available than needed
+            if fixed_negatives.size(1) >= num_negatives:
+                if fixed_negatives.size(1) > num_negatives:
+                    print(f"ℹ️  Using first {num_negatives} of {fixed_negatives.size(1)} pre-generated negatives.")
+            else:
+                raise ValueError(
+                    f"Fixed negatives has only {fixed_negatives.size(1)} negatives, "
+                    f"but config requires {num_negatives}. "
+                    f"Please regenerate with --num_negatives {num_negatives} or higher."
+                )
         
     def __len__(self):
         return len(self.triples)
@@ -134,7 +143,8 @@ class KGCompletionDataset(Dataset):
         if self.mode == 'train':
             # Use fixed negatives if available, otherwise sample on-the-fly
             if self.fixed_negatives is not None:
-                negative_tail_ids = self.fixed_negatives[idx]
+                # Use first num_negatives from fixed negatives
+                negative_tail_ids = self.fixed_negatives[idx, :self.num_negatives]
             else:
                 negative_tail_ids = self._sample_negatives(h_id, r_id, t_id)
             negative_tail_embs = self.entity_embeddings[negative_tail_ids]
