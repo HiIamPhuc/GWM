@@ -183,49 +183,69 @@ class InfoNCELoss(nn.Module):
     """
     InfoNCE (Contrastive) Loss for Knowledge Graph Completion.
     
-    Encourages the model to place predicted tails close to true tails
-    and far from negative (randomly sampled) entities.
+    Supports two modes:
+    1. Random negatives: Uses pre-sampled negative entities
+    2. In-batch negatives: Uses other positives in the batch as negatives (more efficient)
     """
     
-    def __init__(self, temperature=0.07):
+    def __init__(self, temperature=0.07, use_in_batch_negatives=False):
         """
         Args:
             temperature: Temperature parameter for softmax (lower = sharper distribution)
+            use_in_batch_negatives: If True, use in-batch negatives instead of sampled negatives
         """
         super().__init__()
         self.temperature = temperature
+        self.use_in_batch_negatives = use_in_batch_negatives
         
-    def forward(self, predicted_tail, positive_tail, negative_tails):
+    def forward(self, predicted_tail, positive_tail, negative_tails=None):
         """
         Compute InfoNCE loss.
         
         Args:
             predicted_tail: [batch_size, embedding_dim] - Model predictions (already normalized)
             positive_tail: [batch_size, embedding_dim] - True tail embeddings
-            negative_tails: [batch_size, num_negatives, embedding_dim] - Negative samples
+            negative_tails: [batch_size, num_negatives, embedding_dim] - Negative samples (ignored if use_in_batch_negatives=True)
             
         Returns:
             loss: Scalar contrastive loss
         """
         batch_size = predicted_tail.size(0)
-        num_negatives = negative_tails.size(1)
         
-        # Compute positive similarity (cosine similarity)
-        pos_sim = F.cosine_similarity(predicted_tail, positive_tail, dim=-1) / self.temperature  # [batch]
-        
-        # Compute negative similarities
-        # Expand predicted_tail to match negative_tails shape for batch cosine similarity
-        predicted_expanded = predicted_tail.unsqueeze(1).expand_as(negative_tails)  # [batch, num_negatives, embedding_dim]
-        neg_sim = F.cosine_similarity(predicted_expanded, negative_tails, dim=-1) / self.temperature  # [batch, num_negatives]
-        
-        # Concatenate positive and negative scores
-        logits = torch.cat([pos_sim.unsqueeze(1), neg_sim], dim=1)  # [batch, 1 + num_negatives]
-        
-        # Labels: positive is always index 0
-        labels = torch.zeros(batch_size, dtype=torch.long, device=predicted_tail.device)
-        
-        # Cross-entropy loss
-        loss = F.cross_entropy(logits, labels)
+        if self.use_in_batch_negatives:
+            # In-batch negatives: treat all other tails in batch as negatives
+            # Compute similarity matrix between all predictions and all positive tails
+            # Shape: [batch, batch]
+            similarity_matrix = torch.matmul(predicted_tail, positive_tail.t()) / self.temperature
+            
+            # Diagonal elements are positive pairs, off-diagonal are negatives
+            # Labels are just the diagonal indices
+            labels = torch.arange(batch_size, device=predicted_tail.device)
+            
+            # Cross-entropy over the similarity matrix
+            loss = F.cross_entropy(similarity_matrix, labels)
+        else:
+            # Random negatives mode (original implementation)
+            if negative_tails is None:
+                raise ValueError("negative_tails must be provided when use_in_batch_negatives=False")
+            
+            num_negatives = negative_tails.size(1)
+            
+            # Compute positive similarity (cosine similarity)
+            pos_sim = F.cosine_similarity(predicted_tail, positive_tail, dim=-1) / self.temperature  # [batch]
+            
+            # Compute negative similarities
+            predicted_expanded = predicted_tail.unsqueeze(1).expand_as(negative_tails)
+            neg_sim = F.cosine_similarity(predicted_expanded, negative_tails, dim=-1) / self.temperature  # [batch, num_negatives]
+            
+            # Concatenate positive and negative scores
+            logits = torch.cat([pos_sim.unsqueeze(1), neg_sim], dim=1)  # [batch, 1 + num_negatives]
+            
+            # Labels: positive is always index 0
+            labels = torch.zeros(batch_size, dtype=torch.long, device=predicted_tail.device)
+            
+            # Cross-entropy loss
+            loss = F.cross_entropy(logits, labels)
         
         return loss
 

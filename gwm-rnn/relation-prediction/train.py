@@ -45,13 +45,18 @@ def train_one_epoch(
         head_emb = batch['head_emb'].to(device, non_blocking=True)
         relation_emb = batch['relation_emb'].to(device, non_blocking=True)
         positive_tail_emb = batch['positive_tail_emb'].to(device, non_blocking=True)
-        negative_tail_embs = batch['negative_tail_embs'].to(device, non_blocking=True)
         
         # Forward pass
         predicted_tail, _ = model(head_emb, relation_emb)
         
         # Compute loss
-        loss = loss_fn(predicted_tail, positive_tail_emb, negative_tail_embs)
+        # Check if loss function uses in-batch negatives
+        if hasattr(loss_fn, 'use_in_batch_negatives') and loss_fn.use_in_batch_negatives:
+            loss = loss_fn(predicted_tail, positive_tail_emb)
+        else:
+            # Use sampled negatives
+            negative_tail_embs = batch['negative_tail_embs'].to(device, non_blocking=True)
+            loss = loss_fn(predicted_tail, positive_tail_emb, negative_tail_embs)
         
         # Backward pass
         optimizer.zero_grad()
@@ -131,8 +136,13 @@ def main(args):
     
     # Loss function
     if args.loss == 'infonce':
-        loss_fn = InfoNCELoss(temperature=args.temperature)
-        print(f"Loss: InfoNCE (temperature={args.temperature})")
+        loss_fn = InfoNCELoss(temperature=args.temperature, use_in_batch_negatives=args.use_in_batch_negatives)
+        if args.use_in_batch_negatives:
+            print(f"Loss: InfoNCE with In-Batch Negatives (temperature={args.temperature})")
+            print(f"  Using {args.batch_size - 1} negatives per sample (all other tails in batch)")
+        else:
+            print(f"Loss: InfoNCE with Random Negatives (temperature={args.temperature})")
+            print(f"  Using {args.num_negatives} sampled negatives per sample")
     elif args.loss == 'margin':
         loss_fn = MarginRankingLoss(margin=args.margin)
         print(f"Loss: Margin Ranking (margin={args.margin})")
@@ -366,6 +376,7 @@ if __name__ == "__main__":
     parser.add_argument('--loss', type=str, default='infonce', choices=['infonce', 'margin'], help='Loss function')
     parser.add_argument('--temperature', type=float, default=0.07, help='Temperature for InfoNCE loss')
     parser.add_argument('--margin', type=float, default=1.0, help='Margin for ranking loss')
+    parser.add_argument('--use_in_batch_negatives', action='store_true', help='Use in-batch negatives (only for InfoNCE)')
     
     # Optimization
     parser.add_argument('--scheduler_patience', type=int, default=5, help='LR scheduler patience')
