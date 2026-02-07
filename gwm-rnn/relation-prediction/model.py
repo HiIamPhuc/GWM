@@ -119,6 +119,9 @@ class GWM_RNN(nn.Module):
         # Project to entity embedding space
         predicted_tail = self.output_projector(pooled)  # [batch, embedding_dim]
         
+        # Normalize to unit length for cosine similarity
+        predicted_tail = F.normalize(predicted_tail, p=2, dim=-1)
+        
         return predicted_tail, lstm_outputs
     
     def compute_similarity(self, predicted_tail, candidate_embeddings):
@@ -126,13 +129,13 @@ class GWM_RNN(nn.Module):
         Compute cosine similarity between predicted tail and candidate entities.
         
         Args:
-            predicted_tail: [batch_size, embedding_dim]
+            predicted_tail: [batch_size, embedding_dim] - Already normalized from forward()
             candidate_embeddings: [num_candidates, embedding_dim] or [batch, num_candidates, embedding_dim]
             
         Returns:
             similarities: [batch_size, num_candidates]
         """
-        # Normalize vectors
+        # Predicted tail is already normalized in forward(), but normalize again for safety
         predicted_tail = F.normalize(predicted_tail, p=2, dim=-1)
         
         if candidate_embeddings.dim() == 2:
@@ -197,7 +200,7 @@ class InfoNCELoss(nn.Module):
         Compute InfoNCE loss.
         
         Args:
-            predicted_tail: [batch_size, embedding_dim] - Model predictions
+            predicted_tail: [batch_size, embedding_dim] - Model predictions (already normalized)
             positive_tail: [batch_size, embedding_dim] - True tail embeddings
             negative_tails: [batch_size, num_negatives, embedding_dim] - Negative samples
             
@@ -207,19 +210,13 @@ class InfoNCELoss(nn.Module):
         batch_size = predicted_tail.size(0)
         num_negatives = negative_tails.size(1)
         
-        # Normalize all vectors
-        predicted_tail = F.normalize(predicted_tail, p=2, dim=-1)
-        positive_tail = F.normalize(positive_tail, p=2, dim=-1)
-        negative_tails = F.normalize(negative_tails, p=2, dim=-1)
-        
-        # Compute positive similarity
-        pos_sim = torch.sum(predicted_tail * positive_tail, dim=-1) / self.temperature  # [batch]
+        # Compute positive similarity (cosine similarity)
+        pos_sim = F.cosine_similarity(predicted_tail, positive_tail, dim=-1) / self.temperature  # [batch]
         
         # Compute negative similarities
-        neg_sim = torch.bmm(
-            negative_tails, 
-            predicted_tail.unsqueeze(-1)
-        ).squeeze(-1) / self.temperature  # [batch, num_negatives]
+        # Expand predicted_tail to match negative_tails shape for batch cosine similarity
+        predicted_expanded = predicted_tail.unsqueeze(1).expand_as(negative_tails)  # [batch, num_negatives, embedding_dim]
+        neg_sim = F.cosine_similarity(predicted_expanded, negative_tails, dim=-1) / self.temperature  # [batch, num_negatives]
         
         # Concatenate positive and negative scores
         logits = torch.cat([pos_sim.unsqueeze(1), neg_sim], dim=1)  # [batch, 1 + num_negatives]
@@ -253,26 +250,19 @@ class MarginRankingLoss(nn.Module):
         Compute margin ranking loss.
         
         Args:
-            predicted_tail: [batch_size, embedding_dim]
+            predicted_tail: [batch_size, embedding_dim] - Already normalized
             positive_tail: [batch_size, embedding_dim]
             negative_tails: [batch_size, num_negatives, embedding_dim]
             
         Returns:
             loss: Scalar margin loss
         """
-        # Normalize vectors
-        predicted_tail = F.normalize(predicted_tail, p=2, dim=-1)
-        positive_tail = F.normalize(positive_tail, p=2, dim=-1)
-        negative_tails = F.normalize(negative_tails, p=2, dim=-1)
-        
-        # Compute positive score
-        pos_score = torch.sum(predicted_tail * positive_tail, dim=-1)  # [batch]
+        # Compute positive score (cosine similarity)
+        pos_score = F.cosine_similarity(predicted_tail, positive_tail, dim=-1)  # [batch]
         
         # Compute negative scores
-        neg_scores = torch.bmm(
-            negative_tails,
-            predicted_tail.unsqueeze(-1)
-        ).squeeze(-1)  # [batch, num_negatives]
+        predicted_expanded = predicted_tail.unsqueeze(1).expand_as(negative_tails)  # [batch, num_negatives, embedding_dim]
+        neg_scores = F.cosine_similarity(predicted_expanded, negative_tails, dim=-1)  # [batch, num_negatives]
         
         # Margin loss: max(0, margin - pos_score + neg_score)
         # We want pos_score > neg_score + margin
