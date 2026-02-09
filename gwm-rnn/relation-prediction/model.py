@@ -50,12 +50,13 @@ class GWM_RNN(nn.Module):
         self.dropout_rate = dropout
         self.pooling = pooling
         
-        # Input projector: Compress BERT embeddings to LSTM hidden size
+        # Input projector: 2-layer MLP with expansion (Text Space -> Trajectory Space)
         self.input_projector = nn.Sequential(
-            nn.Linear(embedding_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout)
+            nn.Linear(embedding_dim, embedding_dim * 2),  # Expand (e.g., 768 -> 1536)
+            nn.GELU(),                                     # GELU is better for BERT features
+            nn.Dropout(dropout),
+            nn.Linear(embedding_dim * 2, hidden_dim),      # Project to LSTM size (1536 -> 512)
+            nn.LayerNorm(hidden_dim)
         )
         
         # Trajectory LSTM: Process [head, relation] sequence
@@ -69,7 +70,8 @@ class GWM_RNN(nn.Module):
             bidirectional=False  # Unidirectional: head -> relation -> tail
         )
         
-        # Output projector: Map final LSTM state to entity embedding space
+        # Output projector: Map LSTM state to embedding space
+        # This projects to a "delta" (transformation), not absolute target
         self.output_projector = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
@@ -77,6 +79,10 @@ class GWM_RNN(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, embedding_dim),
         )
+        
+        # Residual weight: Learnable parameter to balance head vs delta
+        # Initially set to favor delta (0.3 * head + delta)
+        self.residual_weight = nn.Parameter(torch.tensor(0.3))
         
     def forward(self, head_embeddings, relation_embeddings):
         """
@@ -116,8 +122,11 @@ class GWM_RNN(nn.Module):
         else:
             raise ValueError(f"Unknown pooling method: {self.pooling}")
         
-        # Project to entity embedding space
-        predicted_tail = self.output_projector(pooled)  # [batch, embedding_dim]
+        # Project to embedding space - this is the "delta" (transformation)
+        delta = self.output_projector(pooled)  # [batch, embedding_dim]
+        
+        # Residual connection: predicted_tail = head + delta (TransE logic)
+        predicted_tail = self.residual_weight * head_embeddings + delta
         
         # Normalize to unit length for cosine similarity
         predicted_tail = F.normalize(predicted_tail, p=2, dim=-1)
