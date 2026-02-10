@@ -65,8 +65,14 @@ def compute_ranks(
             
             batch_size = head_emb.size(0)
             
+            # Get head entity IDs for context lookup (if model uses context)
+            head_ids = None
+            if model.use_context:
+                head_ids = torch.tensor([batch['head_id'][i] for i in range(batch_size)], 
+                                       dtype=torch.long).to(device)
+            
             # Generate predictions
-            predicted_tail, _ = model(head_emb, relation_emb)
+            predicted_tail, _ = model(head_emb, relation_emb, head_ids)
             
             # Compute similarity with ALL entities
             similarities = model.compute_similarity(
@@ -166,7 +172,12 @@ def evaluate_epoch(
             positive_tail_emb = batch['positive_tail_emb'].to(device)
             negative_tail_embs = batch['negative_tail_embs'].to(device)
             
-            predicted_tail, _ = model(head_emb, relation_emb)
+            # Get head entity IDs for context lookup (if model uses context)
+            head_ids = None
+            if model.use_context:
+                head_ids = torch.tensor(batch['head_id'], dtype=torch.long).to(device)
+            
+            predicted_tail, _ = model(head_emb, relation_emb, head_ids)
             loss = loss_fn(predicted_tail, positive_tail_emb, negative_tail_embs)
             train_losses.append(loss.item())
     

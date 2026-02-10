@@ -296,6 +296,23 @@ def load_kg_data(data_dir: str, device: str = 'cpu'):
         print(f"  Negatives will be sampled on-the-fly (may cause variance across runs)")
         print(f"  To generate fixed negatives, see dataset.generate_fixed_negatives()")
     
+    # Load entity context embeddings if available (for context-aware model)
+    entity_context_embeddings = None
+    working_dir_context = Path('/kaggle/working/entity_context_embeddings.pt')
+    context_path = data_dir / 'entity_context_embeddings.pt'
+    
+    if working_dir_context.exists():
+        print(f"Loading entity context embeddings from {working_dir_context}")
+        entity_context_embeddings = torch.load(working_dir_context, map_location='cpu')
+        print(f"✓ Loaded context embeddings: {entity_context_embeddings.shape}")
+    elif context_path.exists():
+        print(f"Loading entity context embeddings from {context_path}")
+        entity_context_embeddings = torch.load(context_path, map_location='cpu')
+        print(f"✓ Loaded context embeddings: {entity_context_embeddings.shape}")
+    else:
+        print(f"ℹ️  No context embeddings found - using standard mode (no context)")
+        print(f"  To enable context-aware mode, run: generate_context_embeddings.py")
+    
     # Load ground truth (for filtered evaluation)
     ground_truth = None
     if (data_dir / 'ground_truth.json').exists():
@@ -314,6 +331,7 @@ def load_kg_data(data_dir: str, device: str = 'cpu'):
     return {
         'entity_embeddings': entity_embeddings,
         'relation_embeddings': relation_embeddings,
+        'entity_context_embeddings': entity_context_embeddings,  # None if not available
         'train_triples': train_triples,
         'valid_triples': valid_triples,
         'test_triples': test_triples,

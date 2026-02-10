@@ -33,6 +33,7 @@ class GWM_RNN(nn.Module):
         num_lstm_layers: int = 2,
         dropout: float = 0.1,
         pooling: str = 'last',
+        entity_context_embeddings: torch.Tensor = None,
     ):
         """
         Args:
@@ -41,6 +42,7 @@ class GWM_RNN(nn.Module):
             num_lstm_layers: Number of LSTM layers
             dropout: Dropout rate
             pooling: How to pool LSTM outputs ('last', 'mean', 'max')
+            entity_context_embeddings: [num_entities, embedding_dim] - Pre-computed context for each entity (optional)
         """
         super().__init__()
         
@@ -49,6 +51,15 @@ class GWM_RNN(nn.Module):
         self.num_lstm_layers = num_lstm_layers
         self.dropout_rate = dropout
         self.pooling = pooling
+        self.use_context = entity_context_embeddings is not None
+        
+        # Register entity context embeddings as buffer (not trainable)
+        if entity_context_embeddings is not None:
+            self.register_buffer('entity_context_embeddings', entity_context_embeddings)
+            print(f"✓ Context-aware mode enabled: {entity_context_embeddings.shape}")
+        else:
+            self.register_buffer('entity_context_embeddings', None)
+            print("✓ Standard mode (no context)")
         
         # Input projector: 2-layer MLP with expansion (Text Space -> Trajectory Space)
         self.input_projector = nn.Sequential(
@@ -84,17 +95,25 @@ class GWM_RNN(nn.Module):
         # Initially set to favor delta (0.3 * head + delta)
         self.residual_weight = nn.Parameter(torch.tensor(0.3))
         
-    def forward(self, head_embeddings, relation_embeddings):
+    def forward(self, head_embeddings, relation_embeddings, head_entity_ids=None):
         """
-        Forward pass: Navigate from head to tail via relation.
+        Forward pass: Navigate from head to tail via relation (with optional context).
+        
+        Context-aware mode:
+            Sequence: [context(head), head, relation] -> tail
+            The context provides neighborhood information for entity disambiguation.
+        
+        Standard mode (backward compatible):
+            Sequence: [head, relation] -> tail
         
         Args:
             head_embeddings: [batch_size, embedding_dim] - Pre-computed head entity embeddings
             relation_embeddings: [batch_size, embedding_dim] - Pre-computed relation embeddings
+            head_entity_ids: [batch_size] - Entity IDs for context lookup (required if use_context=True)
             
         Returns:
             predicted_tail: [batch_size, embedding_dim] - Predicted tail entity in embedding space
-            lstm_outputs: [batch_size, 2, hidden_dim] - LSTM outputs for analysis (optional)
+            lstm_outputs: [batch_size, seq_len, hidden_dim] - LSTM outputs (seq_len=2 or 3)
         """
         batch_size = head_embeddings.size(0)
         
@@ -102,12 +121,24 @@ class GWM_RNN(nn.Module):
         head_proj = self.input_projector(head_embeddings)  # [batch, hidden_dim]
         relation_proj = self.input_projector(relation_embeddings)  # [batch, hidden_dim]
         
-        # Create sequence: [head, relation]
-        # This represents the "trajectory" from head through relation
-        sequence = torch.stack([head_proj, relation_proj], dim=1)  # [batch, 2, hidden_dim]
+        # Build sequence based on mode
+        if self.use_context:
+            # Context-aware: [context, head, relation]
+            if head_entity_ids is None:
+                raise ValueError("head_entity_ids required when use_context=True")
+            
+            # Lookup context embeddings
+            context_embs = self.entity_context_embeddings[head_entity_ids]  # [batch, embedding_dim]
+            context_proj = self.input_projector(context_embs)  # [batch, hidden_dim]
+            
+            # 3-step sequence: context -> head -> relation
+            sequence = torch.stack([context_proj, head_proj, relation_proj], dim=1)  # [batch, 3, hidden_dim]
+        else:
+            # Standard: [head, relation]
+            sequence = torch.stack([head_proj, relation_proj], dim=1)  # [batch, 2, hidden_dim]
         
         # Process trajectory with LSTM
-        lstm_outputs, (h_n, c_n) = self.lstm(sequence)  # [batch, 2, hidden_dim]
+        lstm_outputs, (h_n, c_n) = self.lstm(sequence)  # [batch, seq_len, hidden_dim]
         
         # Pool LSTM outputs
         if self.pooling == 'last':
@@ -158,7 +189,7 @@ class GWM_RNN(nn.Module):
         
         return similarities
     
-    def predict_tail(self, head_embeddings, relation_embeddings, all_entity_embeddings, top_k=10):
+    def predict_tail(self, head_embeddings, relation_embeddings, all_entity_embeddings, head_entity_ids=None, top_k=10):
         """
         Predict tail entities for given (head, relation) pairs.
         
@@ -166,6 +197,7 @@ class GWM_RNN(nn.Module):
             head_embeddings: [batch_size, embedding_dim]
             relation_embeddings: [batch_size, embedding_dim]
             all_entity_embeddings: [num_entities, embedding_dim] - All entity embeddings for ranking
+            head_entity_ids: [batch_size] - Entity IDs for context lookup (optional)
             top_k: Number of top predictions to return
             
         Returns:
@@ -173,7 +205,7 @@ class GWM_RNN(nn.Module):
             top_scores: [batch_size, top_k] - Similarity scores
         """
         # Generate prediction
-        predicted_tail, _ = self.forward(head_embeddings, relation_embeddings)
+        predicted_tail, _ = self.forward(head_embeddings, relation_embeddings, head_entity_ids)
         
         # Compute similarities with all entities
         similarities = self.compute_similarity(predicted_tail, all_entity_embeddings)  # [batch, num_entities]

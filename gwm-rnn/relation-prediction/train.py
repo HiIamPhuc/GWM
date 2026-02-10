@@ -46,8 +46,13 @@ def train_one_epoch(
         relation_emb = batch['relation_emb'].to(device, non_blocking=True)
         positive_tail_emb = batch['positive_tail_emb'].to(device, non_blocking=True)
         
+        # Get head entity IDs for context lookup (if model uses context)
+        head_ids = None
+        if model.use_context:
+            head_ids = torch.tensor(batch['head_id'], dtype=torch.long).to(device, non_blocking=True)
+        
         # Forward pass
-        predicted_tail, _ = model(head_emb, relation_emb)
+        predicted_tail, _ = model(head_emb, relation_emb, head_ids)
         
         # Compute loss
         # Check if loss function uses in-batch negatives
@@ -125,7 +130,8 @@ def main(args):
         hidden_dim=args.hidden_dim,
         num_lstm_layers=args.num_lstm_layers,
         dropout=args.dropout,
-        pooling=args.pooling
+        pooling=args.pooling,
+        entity_context_embeddings=data_dict.get('entity_context_embeddings')  # None if not available
     ).to(device)
     
     print(f"Model parameters: {model.get_num_params():,}")
