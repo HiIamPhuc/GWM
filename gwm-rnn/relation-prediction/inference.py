@@ -47,7 +47,8 @@ class KGPredictor:
             hidden_dim=self.config['hidden_dim'],
             num_lstm_layers=self.config['num_lstm_layers'],
             dropout=self.config['dropout'],
-            pooling=self.config['pooling']
+            pooling=self.config['pooling'],
+            entity_context_embeddings=self.data['entity_context_embeddings']  # Required
         ).to(self.device)
         
         # Load weights
@@ -87,13 +88,15 @@ class KGPredictor:
         # Get embeddings
         head_emb = self.data['entity_embeddings'][head_id].unsqueeze(0)  # [1, dim]
         relation_emb = self.data['relation_embeddings'][relation_id].unsqueeze(0)  # [1, dim]
+        head_ids = torch.tensor([head_id], dtype=torch.long).to(self.device)  # [1]
         
-        # Predict
+        # Predict with context
         with torch.no_grad():
             top_indices, top_scores = self.model.predict_tail(
                 head_emb,
                 relation_emb,
                 self.data['entity_embeddings'],
+                head_ids,
                 top_k=top_k
             )
         
@@ -140,12 +143,13 @@ class KGPredictor:
         head_embs = self.data['entity_embeddings'][head_ids]
         relation_embs = self.data['relation_embeddings'][relation_ids]
         
-        # Predict
+        # Predict with context
         with torch.no_grad():
             top_indices, top_scores = self.model.predict_tail(
                 head_embs,
                 relation_embs,
                 self.data['entity_embeddings'],
+                head_ids,
                 top_k=top_k
             )
         

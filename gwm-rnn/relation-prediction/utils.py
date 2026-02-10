@@ -27,23 +27,29 @@ def compute_ranks(
     entity2id: Optional[Dict] = None
 ) -> Dict[str, float]:
     """
-    Compute ranking metrics for knowledge graph completion.
+    Compute ranking metrics for knowledge graph completion (Context-Aware).
+    
+    WORLD MODEL ARCHITECTURE:
+    Model uses context embeddings during evaluation for consistent world knowledge.
+    Context = neighborhood summary (neighbors + relations) from training graph.
     
     For each test triple (h, r, t):
-    1. Generate prediction for (h, r, ?)
+    1. Generate prediction for (h, r, ?) with context(h)
     2. Rank all entities by similarity
     3. Find rank of true tail t
     4. Optionally filter out other valid tails
     
     Args:
-        model: Trained GWM-RNN-KG model
+        model: Trained Context-Aware GWM-RNN-KG model
         dataloader: Evaluation dataloader (KGEvaluationDataset)
         all_entity_embeddings: [num_entities, embedding_dim] for ranking
         device: Device for computation
         filtered: If True, use filtered ranking (exclude other valid tails)
+        save_predictions: Path to save predictions (optional)
+        entity2id: Entity name mapping for readable output (optional)
         
     Returns:
-        Dictionary of metrics: MRR, MR, Hits@1, Hits@3, Hits@10
+        Dictionary of metrics: MRR, MR, Hits@1, Hits@3, Hits@10, Hits@50
     """
     model.eval()
     
@@ -65,13 +71,11 @@ def compute_ranks(
             
             batch_size = head_emb.size(0)
             
-            # Get head entity IDs for context lookup (if model uses context)
-            head_ids = None
-            if model.use_context:
-                head_ids = torch.tensor([batch['head_id'][i] for i in range(batch_size)], 
-                                       dtype=torch.long).to(device)
+            # Get head entity IDs for context lookup (always required)
+            head_ids = torch.tensor([batch['head_id'][i] for i in range(batch_size)], 
+                                   dtype=torch.long).to(device)
             
-            # Generate predictions
+            # Generate predictions with context
             predicted_tail, _ = model(head_emb, relation_emb, head_ids)
             
             # Compute similarity with ALL entities
@@ -172,10 +176,8 @@ def evaluate_epoch(
             positive_tail_emb = batch['positive_tail_emb'].to(device)
             negative_tail_embs = batch['negative_tail_embs'].to(device)
             
-            # Get head entity IDs for context lookup (if model uses context)
-            head_ids = None
-            if model.use_context:
-                head_ids = torch.tensor(batch['head_id'], dtype=torch.long).to(device)
+            # Get head entity IDs for context lookup (always required)
+            head_ids = torch.tensor(batch['head_id'], dtype=torch.long).to(device)
             
             predicted_tail, _ = model(head_emb, relation_emb, head_ids)
             loss = loss_fn(predicted_tail, positive_tail_emb, negative_tail_embs)

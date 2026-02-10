@@ -296,7 +296,7 @@ def load_kg_data(data_dir: str, device: str = 'cpu'):
         print(f"  Negatives will be sampled on-the-fly (may cause variance across runs)")
         print(f"  To generate fixed negatives, see dataset.generate_fixed_negatives()")
     
-    # Load entity context embeddings if available (for context-aware model)
+    # Load entity context embeddings (REQUIRED for context-aware model)
     entity_context_embeddings = None
     working_dir_context = Path('/kaggle/working/entity_context_embeddings.pt')
     context_path = data_dir / 'entity_context_embeddings.pt'
@@ -310,8 +310,17 @@ def load_kg_data(data_dir: str, device: str = 'cpu'):
         entity_context_embeddings = torch.load(context_path, map_location='cpu')
         print(f"✓ Loaded context embeddings: {entity_context_embeddings.shape}")
     else:
-        print(f"ℹ️  No context embeddings found - using standard mode (no context)")
-        print(f"  To enable context-aware mode, run: generate_context_embeddings.py")
+        # Context embeddings are REQUIRED
+        error_msg = (
+            f"❌ ERROR: Context embeddings not found!\\n"
+            f"  This model requires context embeddings for context-aware mode.\\n"
+            f"  Searched locations:\\n"
+            f"    - {context_path}\\n"
+            f"    - {working_dir_context}\\n\\n"
+            f"  To generate context embeddings, run:\\n"
+            f"    python generate_context_embeddings.py --data_dir {data_dir}\\n"
+        )
+        raise FileNotFoundError(error_msg)
     
     # Load ground truth (for filtered evaluation)
     ground_truth = None

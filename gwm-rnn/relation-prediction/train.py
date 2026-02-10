@@ -46,12 +46,10 @@ def train_one_epoch(
         relation_emb = batch['relation_emb'].to(device, non_blocking=True)
         positive_tail_emb = batch['positive_tail_emb'].to(device, non_blocking=True)
         
-        # Get head entity IDs for context lookup (if model uses context)
-        head_ids = None
-        if model.use_context:
-            head_ids = torch.tensor(batch['head_id'], dtype=torch.long).to(device, non_blocking=True)
+        # Get head entity IDs for context lookup (always required)
+        head_ids = torch.tensor(batch['head_id'], dtype=torch.long).to(device, non_blocking=True)
         
-        # Forward pass
+        # Forward pass with context
         predicted_tail, _ = model(head_emb, relation_emb, head_ids)
         
         # Compute loss
@@ -131,7 +129,7 @@ def main(args):
         num_lstm_layers=args.num_lstm_layers,
         dropout=args.dropout,
         pooling=args.pooling,
-        entity_context_embeddings=data_dict.get('entity_context_embeddings')  # None if not available
+        entity_context_embeddings=data_dict['entity_context_embeddings']  # Required
     ).to(device)
     
     print(f"Model parameters: {model.get_num_params():,}")
@@ -226,7 +224,7 @@ def main(args):
         
         # Evaluate
         if epoch % args.eval_every == 0:
-            print("Evaluating on validation set...")
+            print("Evaluating on validation set (with context)...")
             val_metrics = compute_ranks(
                 model=model,
                 dataloader=valid_loader,
@@ -285,15 +283,15 @@ def main(args):
         json.dump(history, f, indent=2)
     
     print("="*70)
-    print("FINAL EVALUATION ON TEST SET")
+    print("FINAL EVALUATION ON TEST SET (Context-Aware)")
     print("="*70)
     
     # Load best model
     checkpoint = torch.load(output_dir / 'checkpoint_best.pt', map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     
-    # Evaluate on test set
-    print("Computing test metrics...")
+    # Evaluate on test set with context
+    print("Computing test metrics with context...")
     test_metrics = compute_ranks(
         model=model,
         dataloader=test_loader,
