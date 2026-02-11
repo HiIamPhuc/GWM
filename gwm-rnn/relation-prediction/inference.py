@@ -17,13 +17,14 @@ from dataset import load_kg_data
 class KGPredictor:
     """Wrapper for trained GWM-RNN-KG model for easy inference."""
     
-    def __init__(self, model_dir: str, device: str = 'cuda'):
+    def __init__(self, model_dir: str, device: str = 'cuda', context_split: str = 'test'):
         """
         Load trained model and data.
         
         Args:
             model_dir: Directory containing trained model and config
             device: Device to run inference on
+            context_split: Which context to use ('train', 'valid', or 'test'). Default: 'test'
         """
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         model_dir = Path(model_dir)
@@ -36,19 +37,33 @@ class KGPredictor:
         print(f"Loading data from {self.config['data_dir']}...")
         self.data = load_kg_data(self.config['data_dir'], device=self.device)
         
+        # Select context based on split
+        if context_split == 'train':
+            self.entity_context = self.data['entity_context_train']
+            print(f"Using TRAIN context for inference")
+        elif context_split == 'valid':
+            self.entity_context = self.data['entity_context_valid']
+            print(f"Using VALID context for inference")
+        elif context_split == 'test':
+            self.entity_context = self.data['entity_context_test']
+            print(f"Using TEST context for inference")
+        else:
+            raise ValueError(f"Invalid context_split: {context_split}. Must be 'train', 'valid', or 'test'")
+        
+        self.entity_context = self.entity_context.to(self.device)
+        
         # Create inverse mapping
         self.id2entity = {v: k for k, v in self.data['entity2id'].items()}
         self.id2relation = {v: k for k, v in self.data['relation2id'].items()}
         
-        # Load model
+        # Load model (no context in __init__ anymore)
         print("Loading model...")
         self.model = GWM_RNN(
             embedding_dim=self.data['embedding_dim'],
             hidden_dim=self.config['hidden_dim'],
             num_lstm_layers=self.config['num_lstm_layers'],
             dropout=self.config['dropout'],
-            pooling=self.config['pooling'],
-            entity_context_embeddings=self.data['entity_context_embeddings']  # Required
+            pooling=self.config['pooling']
         ).to(self.device)
         
         # Load weights
@@ -90,13 +105,14 @@ class KGPredictor:
         relation_emb = self.data['relation_embeddings'][relation_id].unsqueeze(0)  # [1, dim]
         head_ids = torch.tensor([head_id], dtype=torch.long).to(self.device)  # [1]
         
-        # Predict with context
+        # Predict with context for this split
         with torch.no_grad():
             top_indices, top_scores = self.model.predict_tail(
                 head_emb,
                 relation_emb,
                 self.data['entity_embeddings'],
                 head_ids,
+                self.entity_context,
                 top_k=top_k
             )
         
@@ -143,13 +159,14 @@ class KGPredictor:
         head_embs = self.data['entity_embeddings'][head_ids]
         relation_embs = self.data['relation_embeddings'][relation_ids]
         
-        # Predict with context
+        # Predict with context for this split
         with torch.no_grad():
             top_indices, top_scores = self.model.predict_tail(
                 head_embs,
                 relation_embs,
                 self.data['entity_embeddings'],
                 head_ids,
+                self.entity_context,
                 top_k=top_k
             )
         
@@ -173,11 +190,14 @@ def main():
     parser.add_argument('--relation', type=str, required=True, help='Relation')
     parser.add_argument('--top_k', type=int, default=10, help='Number of predictions')
     parser.add_argument('--device', type=str, default='cuda', help='Device')
+    parser.add_argument('--context_split', type=str, default='test', 
+                       choices=['train', 'valid', 'test'],
+                       help='Which context to use (train/valid/test). Default: test')
     
     args = parser.parse_args()
     
     # Load predictor
-    predictor = KGPredictor(args.model_dir, device=args.device)
+    predictor = KGPredictor(args.model_dir, device=args.device, context_split=args.context_split)
     
     # Make prediction
     print("\n" + "="*70)

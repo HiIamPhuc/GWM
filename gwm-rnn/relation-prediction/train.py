@@ -31,6 +31,7 @@ def train_one_epoch(
     optimizer,
     loss_fn,
     device,
+    entity_context_train,
     max_grad_norm=1.0
 ):
     """Train for one epoch."""
@@ -49,8 +50,8 @@ def train_one_epoch(
         # Get head entity IDs for context lookup (always required)
         head_ids = torch.tensor(batch['head_id'], dtype=torch.long).to(device, non_blocking=True)
         
-        # Forward pass with context
-        predicted_tail, _ = model(head_emb, relation_emb, head_ids)
+        # Forward pass with TRAIN context (world knowledge from training graph)
+        predicted_tail, _ = model(head_emb, relation_emb, head_ids, entity_context_train)
         
         # Compute loss
         # Check if loss function uses in-batch negatives
@@ -122,15 +123,19 @@ def main(args):
     print("BUILDING MODEL")
     print("="*70)
     
-    # Create model
+    # Create model (contexts passed dynamically in forward())
     model = GWM_RNN(
         embedding_dim=data_dict['embedding_dim'],
         hidden_dim=args.hidden_dim,
         num_lstm_layers=args.num_lstm_layers,
         dropout=args.dropout,
-        pooling=args.pooling,
-        entity_context_embeddings=data_dict['entity_context_embeddings']  # Required
+        pooling=args.pooling
     ).to(device)
+    
+    # Move context embeddings to device
+    entity_context_train = data_dict['entity_context_train'].to(device)
+    entity_context_valid = data_dict['entity_context_valid'].to(device)
+    entity_context_test = data_dict['entity_context_test'].to(device)
     
     print(f"Model parameters: {model.get_num_params():,}")
     print(f"Hidden dim: {args.hidden_dim}")
@@ -217,6 +222,7 @@ def main(args):
             optimizer=optimizer,
             loss_fn=loss_fn,
             device=device,
+            entity_context_train=entity_context_train,
             max_grad_norm=args.max_grad_norm
         )
         
@@ -224,11 +230,12 @@ def main(args):
         
         # Evaluate
         if epoch % args.eval_every == 0:
-            print("Evaluating on validation set (with context)...")
+            print("Evaluating on validation set (with valid context)...")
             val_metrics = compute_ranks(
                 model=model,
                 dataloader=valid_loader,
                 all_entity_embeddings=data_dict['entity_embeddings'],
+                entity_context_embeddings=entity_context_valid,
                 device=device,
                 filtered=True
             )
@@ -290,12 +297,13 @@ def main(args):
     checkpoint = torch.load(output_dir / 'checkpoint_best.pt', map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     
-    # Evaluate on test set with context
-    print("Computing test metrics with context...")
+    # Evaluate on test set with TEST context
+    print("Computing test metrics with test context...")
     test_metrics = compute_ranks(
         model=model,
         dataloader=test_loader,
         all_entity_embeddings=data_dict['entity_embeddings'],
+        entity_context_embeddings=entity_context_test,
         device=device,
         filtered=True,
         save_predictions=str(output_dir / 'test_predictions.json'),

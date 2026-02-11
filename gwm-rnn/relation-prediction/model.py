@@ -48,7 +48,6 @@ class GWM_RNN(nn.Module):
         num_lstm_layers: int = 2,
         dropout: float = 0.1,
         pooling: str = 'last',
-        entity_context_embeddings: torch.Tensor = None,
     ):
         """
         Context-Aware GWM-RNN for Knowledge Graph Completion.
@@ -61,15 +60,12 @@ class GWM_RNN(nn.Module):
             num_lstm_layers: Number of LSTM layers
             dropout: Dropout rate
             pooling: How to pool LSTM outputs ('last', 'mean', 'max')
-            entity_context_embeddings: [num_entities, embedding_dim] - Pre-computed context for each entity (REQUIRED)
+            
+        Note:
+            Context embeddings are passed dynamically in forward() to support
+            split-specific contexts (train/valid/test have independent world knowledge).
         """
         super().__init__()
-        
-        if entity_context_embeddings is None:
-            raise ValueError(
-                "entity_context_embeddings is required for context-aware mode. \n"
-                "Generate context embeddings using: python generate_context_embeddings.py"
-            )
         
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
@@ -77,9 +73,7 @@ class GWM_RNN(nn.Module):
         self.dropout_rate = dropout
         self.pooling = pooling
         
-        # Register entity context embeddings as buffer (not trainable)
-        self.register_buffer('entity_context_embeddings', entity_context_embeddings)
-        print(f"🌍 Context-Aware World Model initialized: {entity_context_embeddings.shape}")
+        print(f"🌍 Context-Aware World Model initialized (split-specific contexts)")
         print(f"   LSTM Sequence: [context(h), h, r] → tail (3 steps)")
         
         # Input projector: 2-layer MLP with expansion (Text Space -> Trajectory Space)
@@ -116,7 +110,7 @@ class GWM_RNN(nn.Module):
         # Initially set to favor delta (0.3 * head + delta)
         self.residual_weight = nn.Parameter(torch.tensor(0.3))
         
-    def forward(self, head_embeddings, relation_embeddings, head_entity_ids):
+    def forward(self, head_embeddings, relation_embeddings, head_entity_ids, entity_context_embeddings):
         """
         Forward pass: Navigate from head to tail with world knowledge context.
         
@@ -124,7 +118,7 @@ class GWM_RNN(nn.Module):
         Navigation with world knowledge: [context(head), head, relation] → tail
         * Context = summary of head's neighborhood (neighbors + relations) in the KG
         * Enables disambiguation (e.g., "Washington" state vs person based on neighbors)
-        * Used consistently in training, validation, AND testing
+        * Split-specific contexts: train/valid/test use independent world knowledge
         
         3-step LSTM sequence:
             [context(head), head, relation] → tail
@@ -134,6 +128,7 @@ class GWM_RNN(nn.Module):
             head_embeddings: [batch_size, embedding_dim] - Pre-computed head entity embeddings
             relation_embeddings: [batch_size, embedding_dim] - Pre-computed relation embeddings
             head_entity_ids: [batch_size] - Entity IDs for context lookup (REQUIRED)
+            entity_context_embeddings: [num_entities, embedding_dim] - Context for this split (train/valid/test)
             
         Returns:
             predicted_tail: [batch_size, embedding_dim] - Predicted tail entity in embedding space
@@ -141,6 +136,8 @@ class GWM_RNN(nn.Module):
         """
         if head_entity_ids is None:
             raise ValueError("head_entity_ids is required for context-aware model")
+        if entity_context_embeddings is None:
+            raise ValueError("entity_context_embeddings is required (pass split-specific context)")
         
         batch_size = head_embeddings.size(0)
         
@@ -148,8 +145,8 @@ class GWM_RNN(nn.Module):
         head_proj = self.input_projector(head_embeddings)  # [batch, hidden_dim]
         relation_proj = self.input_projector(relation_embeddings)  # [batch, hidden_dim]
         
-        # Lookup context embeddings (world knowledge)
-        context_embs = self.entity_context_embeddings[head_entity_ids]  # [batch, embedding_dim]
+        # Lookup context embeddings (world knowledge for this split)
+        context_embs = entity_context_embeddings[head_entity_ids]  # [batch, embedding_dim]
         context_proj = self.input_projector(context_embs)  # [batch, hidden_dim]
         
         # Build 3-step sequence: context -> head -> relation
@@ -207,7 +204,7 @@ class GWM_RNN(nn.Module):
         
         return similarities
     
-    def predict_tail(self, head_embeddings, relation_embeddings, all_entity_embeddings, head_entity_ids, top_k=10):
+    def predict_tail(self, head_embeddings, relation_embeddings, all_entity_embeddings, head_entity_ids, entity_context_embeddings, top_k=10):
         """
         Predict tail entities for given (head, relation) pairs using context.
         
@@ -216,14 +213,15 @@ class GWM_RNN(nn.Module):
             relation_embeddings: [batch_size, embedding_dim]
             all_entity_embeddings: [num_entities, embedding_dim] - All entity embeddings for ranking
             head_entity_ids: [batch_size] - Entity IDs for context lookup (REQUIRED)
+            entity_context_embeddings: [num_entities, embedding_dim] - Context for this split
             top_k: Number of top predictions to return
             
         Returns:
             top_indices: [batch_size, top_k] - Indices of top-k predicted entities
             top_scores: [batch_size, top_k] - Similarity scores
         """
-        # Generate prediction with context
-        predicted_tail, _ = self.forward(head_embeddings, relation_embeddings, head_entity_ids)
+        # Forward pass with context
+        predicted_tail, _ = self(head_embeddings, relation_embeddings, head_entity_ids, entity_context_embeddings)
         
         # Compute similarities with all entities
         similarities = self.compute_similarity(predicted_tail, all_entity_embeddings)  # [batch, num_entities]

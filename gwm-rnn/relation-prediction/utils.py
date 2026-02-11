@@ -21,6 +21,7 @@ def compute_ranks(
     model,
     dataloader,
     all_entity_embeddings: torch.Tensor,
+    entity_context_embeddings: torch.Tensor,
     device: str = 'cuda',
     filtered: bool = True,
     save_predictions: Optional[str] = None,
@@ -30,11 +31,11 @@ def compute_ranks(
     Compute ranking metrics for knowledge graph completion (Context-Aware).
     
     WORLD MODEL ARCHITECTURE:
-    Model uses context embeddings during evaluation for consistent world knowledge.
-    Context = neighborhood summary (neighbors + relations) from training graph.
+    Model uses split-specific context embeddings for evaluation.
+    Context = neighborhood summary (neighbors + relations) from corresponding split.
     
     For each test triple (h, r, t):
-    1. Generate prediction for (h, r, ?) with context(h)
+    1. Generate prediction for (h, r, ?) with context(h) from correct split
     2. Rank all entities by similarity
     3. Find rank of true tail t
     4. Optionally filter out other valid tails
@@ -43,6 +44,7 @@ def compute_ranks(
         model: Trained Context-Aware GWM-RNN-KG model
         dataloader: Evaluation dataloader (KGEvaluationDataset)
         all_entity_embeddings: [num_entities, embedding_dim] for ranking
+        entity_context_embeddings: [num_entities, embedding_dim] - Context for this split (train/valid/test)
         device: Device for computation
         filtered: If True, use filtered ranking (exclude other valid tails)
         save_predictions: Path to save predictions (optional)
@@ -75,8 +77,8 @@ def compute_ranks(
             head_ids = torch.tensor([batch['head_id'][i] for i in range(batch_size)], 
                                    dtype=torch.long).to(device)
             
-            # Generate predictions with context
-            predicted_tail, _ = model(head_emb, relation_emb, head_ids)
+            # Generate predictions with split-specific context
+            predicted_tail, _ = model(head_emb, relation_emb, head_ids, entity_context_embeddings)
             
             # Compute similarity with ALL entities
             similarities = model.compute_similarity(
@@ -155,6 +157,8 @@ def evaluate_epoch(
     train_loader,
     valid_loader,
     all_entity_embeddings,
+    entity_context_train,
+    entity_context_valid,
     loss_fn,
     device: str = 'cuda'
 ) -> Tuple[float, Dict[str, float]]:
@@ -179,7 +183,7 @@ def evaluate_epoch(
             # Get head entity IDs for context lookup (always required)
             head_ids = torch.tensor(batch['head_id'], dtype=torch.long).to(device)
             
-            predicted_tail, _ = model(head_emb, relation_emb, head_ids)
+            predicted_tail, _ = model(head_emb, relation_emb, head_ids, entity_context_train)
             loss = loss_fn(predicted_tail, positive_tail_emb, negative_tail_embs)
             train_losses.append(loss.item())
     
@@ -190,6 +194,7 @@ def evaluate_epoch(
         model=model,
         dataloader=valid_loader,
         all_entity_embeddings=all_entity_embeddings,
+        entity_context_embeddings=entity_context_valid,
         device=device,
         filtered=True
     )

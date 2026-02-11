@@ -1,7 +1,7 @@
 """Generate entity context embeddings for context-aware GWM-RNN.
 
 This script computes a "neighborhood summary" for each entity by aggregating
-EMBEDDINGS OF BOTH NEIGHBORS AND RELATIONS from the training graph.
+EMBEDDINGS OF BOTH NEIGHBORS AND RELATIONS from the observed graph at each phase.
 
 Context helps with entity disambiguation:
 - "Washington" (state) has neighbors like "Seattle", "Oregon" via "located_in" relations
@@ -12,7 +12,12 @@ For each edge (entity, relation, neighbor), we compute:
 
 This captures both WHO the neighbors are and HOW they're connected.
 
-IMPORTANT: Uses ONLY training triples to avoid data leakage.
+WORLD MODEL ANALOGY:
+- Train context: Built from ONLY training triples (train environment state)
+- Valid context: Built from ONLY validation triples (valid environment state)
+- Test context: Built from ONLY test triples (test environment state)
+
+Each split represents a different observed state, not cumulative knowledge.
 """
 
 import torch
@@ -23,7 +28,7 @@ from tqdm import tqdm
 
 
 def load_kg_data(data_dir):
-    """Load entity embeddings, relation embeddings, and training triples."""
+    """Load entity embeddings, relation embeddings, and all triple splits."""
     data_dir = Path(data_dir)
     
     print(f"Loading data from {data_dir}...")
@@ -44,34 +49,48 @@ def load_kg_data(data_dir):
     relation_embeddings = torch.load(relation_embeddings_path)
     print(f"✓ Loaded relation embeddings: {relation_embeddings.shape}")
     
-    # Load training triples
+    # Load all triple splits
     train_triples_path = data_dir / "train_triples.pt"
+    valid_triples_path = data_dir / "valid_triples.pt"
+    test_triples_path = data_dir / "test_triples.pt"
+    
     if not train_triples_path.exists():
         raise FileNotFoundError(f"Training triples not found at {train_triples_path}")
+    if not valid_triples_path.exists():
+        raise FileNotFoundError(f"Validation triples not found at {valid_triples_path}")
+    if not test_triples_path.exists():
+        raise FileNotFoundError(f"Test triples not found at {test_triples_path}")
     
     train_triples = torch.load(train_triples_path)
-    print(f"✓ Loaded training triples: {train_triples.shape}")
+    valid_triples = torch.load(valid_triples_path)
+    test_triples = torch.load(test_triples_path)
     
-    return entity_embeddings, relation_embeddings, train_triples
+    print(f"✓ Loaded training triples: {train_triples.shape}")
+    print(f"✓ Loaded validation triples: {valid_triples.shape}")
+    print(f"✓ Loaded test triples: {test_triples.shape}")
+    
+    return entity_embeddings, relation_embeddings, train_triples, valid_triples, test_triples
 
 
-def build_neighbor_dict(train_triples):
+def build_neighbor_dict(triples, split_name=""):
     """
-    Build adjacency dictionary from training triples.
+    Build adjacency dictionary from triples.
     
     For each entity, collect all (neighbor_entity, relation) pairs.
     We aggregate both incoming and outgoing edges for richer context.
     
     Args:
-        train_triples: [num_train, 3] tensor of (head, relation, tail)
+        triples: [num_triples, 3] tensor of (head, relation, tail)
+        split_name: Name for logging (e.g., "train", "valid")
     
     Returns:
         neighbors: Dict[entity_id -> List[(neighbor_entity_id, relation_id)]]
     """
-    print("\nBuilding neighbor dictionary...")
+    desc = f"Building neighbor dict ({split_name})" if split_name else "Building neighbor dictionary"
+    print(f"\n{desc}...")
     neighbors = defaultdict(list)
     
-    for head, rel, tail in tqdm(train_triples, desc="Processing triples"):
+    for head, rel, tail in tqdm(triples, desc="Processing triples"):
         head, rel, tail = head.item(), rel.item(), tail.item()
         
         # Add bidirectional edges with relation information
@@ -82,7 +101,7 @@ def build_neighbor_dict(train_triples):
     
     # Statistics
     num_entities_with_neighbors = len(neighbors)
-    avg_neighbors = sum(len(v) for v in neighbors.values()) / num_entities_with_neighbors
+    avg_neighbors = sum(len(v) for v in neighbors.values()) / num_entities_with_neighbors if num_entities_with_neighbors > 0 else 0
     
     print(f"✓ Built neighborhood graph:")
     print(f"  - Entities with neighbors: {num_entities_with_neighbors}")
@@ -91,7 +110,7 @@ def build_neighbor_dict(train_triples):
     return neighbors
 
 
-def compute_context_embeddings(entity_embeddings, relation_embeddings, neighbors, aggregation='mean'):
+def compute_context_embeddings(entity_embeddings, relation_embeddings, neighbors, aggregation='mean', top_k=None, split_name=""):
     """
     Compute context embedding for each entity by aggregating both neighbor entities and relations.
     
@@ -107,12 +126,17 @@ def compute_context_embeddings(entity_embeddings, relation_embeddings, neighbors
         relation_embeddings: [num_relations, embedding_dim]
         neighbors: Dict[entity_id -> List[(neighbor_id, relation_id)]]
         aggregation: 'mean' or 'sum'
+        top_k: If provided, only aggregate top-k neighbors by edge strength (reduces noise)
+        split_name: Name for logging (e.g., "train", "valid")
     
     Returns:
         context_embeddings: [num_entities, embedding_dim]
     """
-    print(f"\nComputing context embeddings (aggregation={aggregation})...")
+    desc = f"Computing context ({split_name})" if split_name else "Computing context embeddings"
+    print(f"\n{desc} (aggregation={aggregation}, top_k={top_k if top_k else 'all'})...")
     print("  Including both entity and relation information for richer context")
+    if top_k:
+        print(f"  Using top-{top_k} aggregation to reduce noise from high-degree nodes")
     
     num_entities, embedding_dim = entity_embeddings.shape
     context_embeddings = torch.zeros(num_entities, embedding_dim)
@@ -131,7 +155,14 @@ def compute_context_embeddings(entity_embeddings, relation_embeddings, neighbors
             
             edge_representations = torch.stack(edge_representations)  # [num_neighbors, embedding_dim]
             
-            # Aggregate across all edges
+            # Apply top-k selection if specified (reduces noise from high-degree nodes)
+            if top_k is not None and len(edge_representations) > top_k:
+                # Score edges by magnitude (stronger connections are more relevant)
+                edge_scores = edge_representations.norm(dim=1)  # [num_neighbors]
+                top_k_indices = torch.topk(edge_scores, k=top_k, largest=True).indices
+                edge_representations = edge_representations[top_k_indices]  # [top_k, embedding_dim]
+            
+            # Aggregate across all edges (or top-k edges)
             if aggregation == 'mean':
                 context_embeddings[entity_id] = edge_representations.mean(dim=0)
             elif aggregation == 'sum':
@@ -152,45 +183,120 @@ def compute_context_embeddings(entity_embeddings, relation_embeddings, neighbors
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate entity context embeddings (entity + relation) from training graph")
+    parser = argparse.ArgumentParser(description="Generate entity context embeddings (entity + relation) for each split")
     parser.add_argument('--data_dir', type=str, required=True,
-                        help='Directory containing entity_embeddings.pt, relation_embeddings.pt, and train_triples.pt')
+                        help='Directory containing embeddings and triple files')
     parser.add_argument('--aggregation', type=str, default='mean', choices=['mean', 'sum'],
                         help='Aggregation method for edge representations (neighbor + relation)')
-    parser.add_argument('--output_name', type=str, default='entity_context_embeddings.pt',
-                        help='Output filename')
+    parser.add_argument('--top_k', type=int, default=None,
+                        help='Only aggregate top-k neighbors by edge strength (reduces noise, recommended: 15-20)')
     
     args = parser.parse_args()
     
     print("="*80)
-    print(" "*15 + "ENTITY CONTEXT EMBEDDING GENERATION (Entity + Relation)")
+    print(" "*10 + "ENTITY CONTEXT EMBEDDING GENERATION (World Model Approach)")
     print("="*80)
     print(f"Data directory: {args.data_dir}")
     print(f"Aggregation: {args.aggregation}")
+    print(f"Top-k neighbors: {args.top_k if args.top_k else 'All (no filtering)'}")
     print(f"Context includes: Neighbor entities + Relations")
+    print("\nWorld Model Strategy:")
+    print("  - Train context: Built from training triples only")
+    print("  - Valid context: Built from validation triples only")
+    print("  - Test context: Built from test triples only")
+    print("  Each split represents its own independent environment state")
+    if args.top_k:
+        print(f"\n⚡ Using top-{args.top_k} aggregation to reduce over-smoothing")
+        print("   (Based on research: Corso et al. 2020, Hamilton et al. 2017)")
     print("="*80)
     
     # Load data
-    entity_embeddings, relation_embeddings, train_triples = load_kg_data(args.data_dir)
+    entity_embeddings, relation_embeddings, train_triples, valid_triples, test_triples = load_kg_data(args.data_dir)
     
-    # Build neighborhood structure (ONLY from training triples)
-    neighbors = build_neighbor_dict(train_triples)
+    data_dir = Path(args.data_dir)
     
-    # Compute context embeddings (including both entity and relation information)
-    context_embeddings = compute_context_embeddings(
+    # ========================================================================
+    # 1. TRAIN CONTEXT: Use only training triples
+    # ========================================================================
+    print("\n" + "="*80)
+    print("GENERATING TRAIN CONTEXT (training triples only)")
+    print("="*80)
+    
+    train_neighbors = build_neighbor_dict(train_triples, split_name="train")
+    train_context = compute_context_embeddings(
         entity_embeddings,
         relation_embeddings,
-        neighbors, 
-        aggregation=args.aggregation
+        train_neighbors,
+        aggregation=args.aggregation,
+        top_k=args.top_k,
+        split_name="train"
     )
     
-    # Save
-    output_path = Path(args.data_dir) / args.output_name
-    torch.save(context_embeddings, output_path)
-    print(f"\n✅ Context embeddings saved to: {output_path}")
-    print(f"   Shape: {context_embeddings.shape}")
-    print(f"   Dtype: {context_embeddings.dtype}")
-    print(f"   Includes: Entity + Relation information")
+    train_output = data_dir / "entity_context_embeddings_train.pt"
+    torch.save(train_context, train_output)
+    print(f"✅ Saved: {train_output}")
+    
+    # ========================================================================
+    # 2. VALID CONTEXT: Use only validation triples
+    # ========================================================================
+    print("\n" + "="*80)
+    print("GENERATING VALID CONTEXT (validation triples only)")
+    print("="*80)
+    
+    valid_neighbors = build_neighbor_dict(valid_triples, split_name="valid")
+    valid_context = compute_context_embeddings(
+        entity_embeddings,
+        relation_embeddings,
+        valid_neighbors,
+        aggregation=args.aggregation,
+        top_k=args.top_k,
+        split_name="valid"
+    )
+    
+    valid_output = data_dir / "entity_context_embeddings_valid.pt"
+    torch.save(valid_context, valid_output)
+    print(f"✅ Saved: {valid_output}")
+    
+    # ========================================================================
+    # 3. TEST CONTEXT: Use only test triples
+    # ========================================================================
+    print("\n" + "="*80)
+    print("GENERATING TEST CONTEXT (test triples only)")
+    print("="*80)
+    
+    test_neighbors = build_neighbor_dict(test_triples, split_name="test")
+    test_context = compute_context_embeddings(
+        entity_embeddings,
+        relation_embeddings,
+        test_neighbors,
+        aggregation=args.aggregation,
+        top_k=args.top_k,
+        split_name="test"
+    )
+    
+    test_output = data_dir / "entity_context_embeddings_test.pt"
+    torch.save(test_context, test_output)
+    print(f"✅ Saved: {test_output}")
+    
+    # ========================================================================
+    # SUMMARY
+    # ========================================================================
+    print("\n" + "="*80)
+    print("SUMMARY")
+    print("="*80)
+    print(f"✅ Train context: {train_output}")
+    print(f"   - Shape: {train_context.shape}")
+    print(f"   - Non-zero entities: {(train_context.norm(dim=1) > 0).sum().item()}")
+    print(f"\n✅ Valid context: {valid_output}")
+    print(f"   - Shape: {valid_context.shape}")
+    print(f"   - Non-zero entities: {(valid_context.norm(dim=1) > 0).sum().item()}")
+    print(f"\n✅ Test context: {test_output}")
+    print(f"   - Shape: {test_context.shape}")
+    print(f"   - Non-zero entities: {(test_context.norm(dim=1) > 0).sum().item()}")
+    print("\nUsage in training/evaluation:")
+    print("  - Training: Use entity_context_embeddings_train.pt")
+    print("  - Valid evaluation: Use entity_context_embeddings_valid.pt")
+    print("  - Test evaluation: Use entity_context_embeddings_test.pt")
     print("="*80)
 
 
