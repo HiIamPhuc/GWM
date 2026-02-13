@@ -47,11 +47,12 @@ def train_one_epoch(
         relation_emb = batch['relation_emb'].to(device, non_blocking=True)
         positive_tail_emb = batch['positive_tail_emb'].to(device, non_blocking=True)
         
-        # Get head entity IDs for context lookup (always required)
+        # Get entity/relation IDs for hybrid embeddings (REQUIRED)
         head_ids = torch.tensor(batch['head_id'], dtype=torch.long).to(device, non_blocking=True)
+        relation_ids = torch.tensor(batch['relation_id'], dtype=torch.long).to(device, non_blocking=True)
         
         # Forward pass with TRAIN context (world knowledge from training graph)
-        predicted_tail, _ = model(head_emb, relation_emb, head_ids, entity_context_train)
+        predicted_tail, _ = model(head_emb, relation_emb, head_ids, relation_ids, entity_context_train)
         
         # Compute loss
         # Check if loss function uses in-batch negatives
@@ -123,13 +124,17 @@ def main(args):
     print("BUILDING MODEL")
     print("="*70)
     
-    # Create model (contexts passed dynamically in forward())
+    # Create model with HYBRID EMBEDDINGS (contexts passed dynamically in forward())
     model = GWM_RNN(
+        num_entities=data_dict['num_entities'],
+        num_relations=data_dict['num_relations'],
         embedding_dim=data_dict['embedding_dim'],
+        learnable_dim=args.learnable_dim,
         hidden_dim=args.hidden_dim,
         num_lstm_layers=args.num_lstm_layers,
         dropout=args.dropout,
-        pooling=args.pooling
+        pooling=args.pooling,
+        hybrid_weight=args.hybrid_weight
     ).to(device)
     
     # Move context embeddings to device
@@ -139,9 +144,11 @@ def main(args):
     
     print(f"Model parameters: {model.get_num_params():,}")
     print(f"Hidden dim: {args.hidden_dim}")
+    print(f"Learnable dim: {args.learnable_dim}")
     print(f"LSTM layers: {args.num_lstm_layers}")
     print(f"Pooling: {args.pooling}")
     print(f"Dropout: {args.dropout}")
+    print(f"Hybrid weight: {args.hybrid_weight}")
     
     # Loss function
     if args.loss == 'infonce':
@@ -375,6 +382,10 @@ if __name__ == "__main__":
     parser.add_argument('--num_lstm_layers', type=int, default=2, help='Number of LSTM layers')
     parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
     parser.add_argument('--pooling', type=str, default='last', choices=['last', 'mean', 'max'], help='Pooling method')
+    
+    # Hybrid embeddings
+    parser.add_argument('--learnable_dim', type=int, default=768, help='Dimension of learnable embeddings (for geometric patterns)')
+    parser.add_argument('--hybrid_weight', type=float, default=0.5, help='Weight for BERT vs learnable (0.5 = equal weight)')
     
     # Training
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')

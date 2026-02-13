@@ -16,26 +16,31 @@ import torch.nn.functional as F
 
 class GWM_RNN(nn.Module):
     """
-    Context-Aware GWM-RNN for Knowledge Graph Completion.
+    Context-Aware GWM-RNN for Knowledge Graph Completion with HYBRID EMBEDDINGS.
     
     WORLD MODEL ARCHITECTURE:
     Always uses 3-step LSTM sequence: [context(h), h, r] → tail
     
     - context(h): Neighborhood summary (mean of neighbor+relation pairs from training graph)
-    - h: Head entity embedding
-    - r: Relation embedding
+    - h: Head entity embedding (HYBRID: BERT + Learnable)
+    - r: Relation embedding (HYBRID: BERT + Learnable)
     
-    The model learns to navigate from head to tail using both:
-    1. The head entity's semantic features
-    2. The head entity's structural context (who it connects to and how)
-    3. The relation to traverse
+    HYBRID EMBEDDINGS:
+    The model combines TWO sources of information:
+    1. **BERT embeddings** (frozen): Semantic similarity from text descriptions
+       - Example: "Apple Inc." and "Microsoft" have similar vectors
+    2. **Learnable embeddings** (trained): Geometric patterns from graph structure
+       - Example: Apple and Microsoft get DIFFERENT structural vectors
     
-    This enables better entity disambiguation and leverages graph structure.
+    This combination gives:
+    - Semantic understanding (BERT): "Washington" refers to locations/people
+    - Geometric precision (Learnable): Distinguish "Washington state" vs "George Washington"
     
     Architecture Components:
-        1. Input Projector: 2-layer MLP with expansion (768 → 1536 → hidden_dim)
-        2. LSTM: Processes 3-step sequence to generate trajectory
-        3. Output Projector: Maps LSTM state to embedding space (with residual connection)
+        1. Learnable Entity/Relation Embeddings: nn.Embedding (trained end-to-end)
+        2. Input Projector: 2-layer MLP with expansion (1536 → 3072 → hidden_dim)
+        3. LSTM: Processes 3-step sequence to generate trajectory
+        4. Output Projector: Maps LSTM state to embedding space (with residual connection)
     
     The model learns to navigate from head to tail via relation in embedding space,
     using neighborhood context for disambiguation.
@@ -43,23 +48,32 @@ class GWM_RNN(nn.Module):
     
     def __init__(
         self,
+        num_entities: int,
+        num_relations: int,
         embedding_dim: int = 768,
+        learnable_dim: int = 768,
         hidden_dim: int = 512,
         num_lstm_layers: int = 2,
         dropout: float = 0.1,
         pooling: str = 'last',
+        hybrid_weight: float = 0.5,
     ):
         """
-        Context-Aware GWM-RNN for Knowledge Graph Completion.
+        Context-Aware GWM-RNN for Knowledge Graph Completion with HYBRID EMBEDDINGS.
         
         Always uses 3-step LSTM sequence: [context(h), h, r] → tail
         
         Args:
-            embedding_dim: Dimension of pre-computed entity/relation embeddings (768 for all-mpnet-base-v2)
+            num_entities: Total number of entities in the KG
+            num_relations: Total number of relations in the KG
+            embedding_dim: Dimension of pre-computed BERT embeddings (768 for all-mpnet-base-v2)
+            learnable_dim: Dimension of learnable embeddings (768 recommended)
             hidden_dim: Hidden dimension of LSTM
             num_lstm_layers: Number of LSTM layers
             dropout: Dropout rate
             pooling: How to pool LSTM outputs ('last', 'mean', 'max')
+            hybrid_weight: Weight for combining embeddings (0.5 = equal weight)
+                          hybrid = hybrid_weight * BERT + (1 - hybrid_weight) * learnable
             
         Note:
             Context embeddings are passed dynamically in forward() to support
@@ -67,21 +81,42 @@ class GWM_RNN(nn.Module):
         """
         super().__init__()
         
+        self.num_entities = num_entities
+        self.num_relations = num_relations
         self.embedding_dim = embedding_dim
+        self.learnable_dim = learnable_dim
         self.hidden_dim = hidden_dim
         self.num_lstm_layers = num_lstm_layers
         self.dropout_rate = dropout
         self.pooling = pooling
+        self.hybrid_weight = hybrid_weight
         
-        print(f"🌍 Context-Aware World Model initialized (split-specific contexts)")
+        print(f"🌍 Hybrid Embedding World Model initialized")
         print(f"   LSTM Sequence: [context(h), h, r] → tail (3 steps)")
+        print(f"   📊 HYBRID EMBEDDINGS:")
+        print(f"      - BERT: {embedding_dim}D (semantic, frozen)")
+        print(f"      - Learnable: {learnable_dim}D (geometric, trainable)")
+        print(f"      - Combined: {embedding_dim + learnable_dim}D")
+        print(f"      - Hybrid weight: {hybrid_weight:.2f} (BERT) + {1-hybrid_weight:.2f} (learnable)")
         
-        # Input projector: 2-layer MLP with expansion (Text Space -> Trajectory Space)
+        # HYBRID EMBEDDINGS: Learnable entity and relation embeddings
+        # These capture geometric patterns that BERT cannot learn (e.g., structural roles)
+        self.entity_embeddings = nn.Embedding(num_entities, learnable_dim)
+        self.relation_embeddings = nn.Embedding(num_relations, learnable_dim)
+        
+        # Initialize with Xavier uniform (better for geometric embeddings)
+        nn.init.xavier_uniform_(self.entity_embeddings.weight)
+        nn.init.xavier_uniform_(self.relation_embeddings.weight)
+        
+        # Combined dimension after concatenating BERT + learnable
+        combined_dim = embedding_dim + learnable_dim
+        
+        # Input projector: 2-layer MLP with expansion (Hybrid Space -> Trajectory Space)
         self.input_projector = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim * 2),  # Expand (e.g., 768 -> 1536)
-            nn.GELU(),                                     # GELU is better for BERT features
+            nn.Linear(combined_dim, combined_dim * 2),  # Expand (e.g., 1536 -> 3072)
+            nn.GELU(),                                  # GELU is better for BERT features
             nn.Dropout(dropout),
-            nn.Linear(embedding_dim * 2, hidden_dim),      # Project to LSTM size (1536 -> 512)
+            nn.Linear(combined_dim * 2, hidden_dim),    # Project to LSTM size (3072 -> 512)
             nn.LayerNorm(hidden_dim)
         )
         
@@ -96,23 +131,32 @@ class GWM_RNN(nn.Module):
             bidirectional=False  # Unidirectional: head -> relation -> tail
         )
         
-        # Output projector: Map LSTM state to embedding space
+        # Output projector: Map LSTM state to HYBRID embedding space
         # This projects to a "delta" (transformation), not absolute target
         self.output_projector = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, embedding_dim),
+            nn.Linear(hidden_dim, combined_dim),  # Output to combined dimension
         )
         
         # Residual weight: Learnable parameter to balance head vs delta
         # Initially set to favor delta (0.3 * head + delta)
         self.residual_weight = nn.Parameter(torch.tensor(0.3))
         
-    def forward(self, head_embeddings, relation_embeddings, head_entity_ids, entity_context_embeddings):
+    def forward(self, head_embeddings, relation_embeddings, head_entity_ids, relation_ids, entity_context_embeddings):
         """
-        Forward pass: Navigate from head to tail with world knowledge context.
+        Forward pass: Navigate from head to tail with HYBRID embeddings and world knowledge.
+        
+        HYBRID EMBEDDING COMBINATION:
+        For each entity/relation, we combine:
+            1. BERT embedding (semantic): Frozen, from text descriptions
+            2. Learnable embedding (geometric): Trained, captures graph structure
+        
+        final_embedding = concat([BERT_emb, learnable_emb])
+        
+        This gives the model both semantic understanding AND geometric precision.
         
         WORLD MODEL ARCHITECTURE:
         Navigation with world knowledge: [context(head), head, relation] → tail
@@ -125,29 +169,45 @@ class GWM_RNN(nn.Module):
             The context provides neighborhood information for entity disambiguation.
         
         Args:
-            head_embeddings: [batch_size, embedding_dim] - Pre-computed head entity embeddings
-            relation_embeddings: [batch_size, embedding_dim] - Pre-computed relation embeddings
-            head_entity_ids: [batch_size] - Entity IDs for context lookup (REQUIRED)
+            head_embeddings: [batch_size, embedding_dim] - Pre-computed BERT head embeddings
+            relation_embeddings: [batch_size, embedding_dim] - Pre-computed BERT relation embeddings
+            head_entity_ids: [batch_size] - Entity IDs for learnable embedding lookup (REQUIRED)
+            relation_ids: [batch_size] - Relation IDs for learnable embedding lookup (REQUIRED)
             entity_context_embeddings: [num_entities, embedding_dim] - Context for this split (train/valid/test)
             
         Returns:
-            predicted_tail: [batch_size, embedding_dim] - Predicted tail entity in embedding space
+            predicted_tail: [batch_size, combined_dim] - Predicted tail entity in HYBRID embedding space
             lstm_outputs: [batch_size, 3, hidden_dim] - LSTM outputs for 3-step sequence
         """
         if head_entity_ids is None:
-            raise ValueError("head_entity_ids is required for context-aware model")
+            raise ValueError("head_entity_ids is required for hybrid embeddings")
+        if relation_ids is None:
+            raise ValueError("relation_ids is required for hybrid embeddings")
         if entity_context_embeddings is None:
             raise ValueError("entity_context_embeddings is required (pass split-specific context)")
         
         batch_size = head_embeddings.size(0)
         
-        # Project inputs to hidden dimension
-        head_proj = self.input_projector(head_embeddings)  # [batch, hidden_dim]
-        relation_proj = self.input_projector(relation_embeddings)  # [batch, hidden_dim]
+        # HYBRID EMBEDDINGS: Combine BERT + Learnable
+        # Entity embeddings
+        learnable_entity_emb = self.entity_embeddings(head_entity_ids)  # [batch, learnable_dim]
+        hybrid_head = torch.cat([head_embeddings, learnable_entity_emb], dim=-1)  # [batch, combined_dim]
         
-        # Lookup context embeddings (world knowledge for this split)
+        # Relation embeddings
+        learnable_relation_emb = self.relation_embeddings(relation_ids)  # [batch, learnable_dim]
+        hybrid_relation = torch.cat([relation_embeddings, learnable_relation_emb], dim=-1)  # [batch, combined_dim]
+        
+        # Context embeddings (keep BERT only for context, as it's computed from BERT embeddings)
+        # Note: Context is pre-computed from training graph, so we don't add learnable part
         context_embs = entity_context_embeddings[head_entity_ids]  # [batch, embedding_dim]
-        context_proj = self.input_projector(context_embs)  # [batch, hidden_dim]
+        # Pad context to combined_dim by concatenating zeros
+        context_padding = torch.zeros(batch_size, self.learnable_dim, device=context_embs.device)
+        hybrid_context = torch.cat([context_embs, context_padding], dim=-1)  # [batch, combined_dim]
+        
+        # Project inputs to hidden dimension
+        head_proj = self.input_projector(hybrid_head)  # [batch, hidden_dim]
+        relation_proj = self.input_projector(hybrid_relation)  # [batch, hidden_dim]
+        context_proj = self.input_projector(hybrid_context)  # [batch, hidden_dim]
         
         # Build 3-step sequence: context -> head -> relation
         sequence = torch.stack([context_proj, head_proj, relation_proj], dim=1)  # [batch, 3, hidden_dim]
@@ -169,23 +229,43 @@ class GWM_RNN(nn.Module):
             raise ValueError(f"Unknown pooling method: {self.pooling}")
         
         # Project to embedding space - this is the "delta" (transformation)
-        delta = self.output_projector(pooled)  # [batch, embedding_dim]
+        delta = self.output_projector(pooled)  # [batch, combined_dim]
         
         # Residual connection: predicted_tail = head + delta (TransE logic)
-        predicted_tail = self.residual_weight * head_embeddings + delta
+        # Use hybrid head (not just BERT head)
+        predicted_tail = self.residual_weight * hybrid_head + delta
         
         # Normalize to unit length for cosine similarity
         predicted_tail = F.normalize(predicted_tail, p=2, dim=-1)
         
         return predicted_tail, lstm_outputs
     
-    def compute_similarity(self, predicted_tail, candidate_embeddings):
+    def get_hybrid_embeddings(self, entity_ids, bert_embeddings):
+        """
+        Get hybrid embeddings for given entities.
+        
+        Args:
+            entity_ids: [batch_size] or [num_entities] - Entity IDs
+            bert_embeddings: [batch_size, embedding_dim] or [num_entities, embedding_dim] - BERT embeddings
+            
+        Returns:
+            hybrid_embeddings: [batch_size, combined_dim] - Concatenated BERT + learnable
+        """
+        learnable_emb = self.entity_embeddings(entity_ids)  # [batch/num, learnable_dim]
+        hybrid_emb = torch.cat([bert_embeddings, learnable_emb], dim=-1)  # [batch/num, combined_dim]
+        return hybrid_emb
+    
+    def compute_similarity(self, predicted_tail, candidate_embeddings, candidate_ids=None):
         """
         Compute cosine similarity between predicted tail and candidate entities.
         
+        For HYBRID embeddings, candidate_embeddings should be BERT only,
+        and we'll add learnable part using candidate_ids.
+        
         Args:
-            predicted_tail: [batch_size, embedding_dim] - Already normalized from forward()
-            candidate_embeddings: [num_candidates, embedding_dim] or [batch, num_candidates, embedding_dim]
+            predicted_tail: [batch_size, combined_dim] - Already normalized from forward()
+            candidate_embeddings: [num_candidates, embedding_dim] - BERT embeddings of candidates
+            candidate_ids: [num_candidates] - Entity IDs for learnable embeddings (REQUIRED for hybrid)
             
         Returns:
             similarities: [batch_size, num_candidates]
@@ -195,24 +275,51 @@ class GWM_RNN(nn.Module):
         
         if candidate_embeddings.dim() == 2:
             # All candidates are the same for entire batch
+            # Create hybrid embeddings for candidates
+            if candidate_ids is not None:
+                candidate_embeddings = self.get_hybrid_embeddings(candidate_ids, candidate_embeddings)
+            else:
+                # Fallback: pad with zeros if no IDs provided (for backward compatibility)
+                batch_size = predicted_tail.size(0)
+                num_candidates = candidate_embeddings.size(0)
+                padding = torch.zeros(num_candidates, self.learnable_dim, device=candidate_embeddings.device)
+                candidate_embeddings = torch.cat([candidate_embeddings, padding], dim=-1)
+            
             candidate_embeddings = F.normalize(candidate_embeddings, p=2, dim=-1)
             similarities = torch.matmul(predicted_tail, candidate_embeddings.t())  # [batch, num_candidates]
         else:
             # Different candidates per batch item
+            # Create hybrid embeddings if IDs provided
+            if candidate_ids is not None:
+                batch_size, num_candidates = candidate_embeddings.shape[0], candidate_embeddings.shape[1]
+                # Reshape for batch processing
+                flat_bert = candidate_embeddings.reshape(-1, candidate_embeddings.size(-1))
+                flat_ids = candidate_ids.reshape(-1) if candidate_ids.dim() > 1 else candidate_ids
+                flat_hybrid = self.get_hybrid_embeddings(flat_ids, flat_bert)
+                candidate_embeddings = flat_hybrid.reshape(batch_size, num_candidates, -1)
+            else:
+                # Fallback: pad with zeros
+                batch_size, num_candidates = candidate_embeddings.shape[0], candidate_embeddings.shape[1]
+                padding = torch.zeros(batch_size, num_candidates, self.learnable_dim, device=candidate_embeddings.device)
+                candidate_embeddings = torch.cat([candidate_embeddings, padding], dim=-1)
+            
             candidate_embeddings = F.normalize(candidate_embeddings, p=2, dim=-1)
             similarities = torch.sum(predicted_tail.unsqueeze(1) * candidate_embeddings, dim=-1)  # [batch, num_candidates]
         
         return similarities
     
-    def predict_tail(self, head_embeddings, relation_embeddings, all_entity_embeddings, head_entity_ids, entity_context_embeddings, top_k=10):
+    def predict_tail(self, head_embeddings, relation_embeddings, all_entity_embeddings, 
+                     head_entity_ids, relation_ids, all_entity_ids, entity_context_embeddings, top_k=10):
         """
-        Predict tail entities for given (head, relation) pairs using context.
+        Predict tail entities for given (head, relation) pairs using HYBRID embeddings and context.
         
         Args:
-            head_embeddings: [batch_size, embedding_dim]
-            relation_embeddings: [batch_size, embedding_dim]
-            all_entity_embeddings: [num_entities, embedding_dim] - All entity embeddings for ranking
-            head_entity_ids: [batch_size] - Entity IDs for context lookup (REQUIRED)
+            head_embeddings: [batch_size, embedding_dim] - BERT embeddings
+            relation_embeddings: [batch_size, embedding_dim] - BERT embeddings
+            all_entity_embeddings: [num_entities, embedding_dim] - BERT embeddings for ALL entities
+            head_entity_ids: [batch_size] - Entity IDs for hybrid embedding lookup (REQUIRED)
+            relation_ids: [batch_size] - Relation IDs for hybrid embedding lookup (REQUIRED)
+            all_entity_ids: [num_entities] - IDs of all entities for ranking (REQUIRED)
             entity_context_embeddings: [num_entities, embedding_dim] - Context for this split
             top_k: Number of top predictions to return
             
@@ -220,11 +327,11 @@ class GWM_RNN(nn.Module):
             top_indices: [batch_size, top_k] - Indices of top-k predicted entities
             top_scores: [batch_size, top_k] - Similarity scores
         """
-        # Forward pass with context
-        predicted_tail, _ = self(head_embeddings, relation_embeddings, head_entity_ids, entity_context_embeddings)
+        # Forward pass with hybrid embeddings and context
+        predicted_tail, _ = self(head_embeddings, relation_embeddings, head_entity_ids, relation_ids, entity_context_embeddings)
         
-        # Compute similarities with all entities
-        similarities = self.compute_similarity(predicted_tail, all_entity_embeddings)  # [batch, num_entities]
+        # Compute similarities with all entities (using hybrid embeddings)
+        similarities = self.compute_similarity(predicted_tail, all_entity_embeddings, all_entity_ids)  # [batch, num_entities]
         
         # Get top-k predictions
         top_scores, top_indices = torch.topk(similarities, k=top_k, dim=1)
