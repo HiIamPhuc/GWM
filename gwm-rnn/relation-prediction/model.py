@@ -455,6 +455,156 @@ class MarginRankingLoss(nn.Module):
         return loss.mean()
 
 
+class SelfAdversarialLoss(nn.Module):
+    """
+    Self-Adversarial Negative Sampling Loss (from RotatE paper).
+    
+    Uses self-adversarial weighting where negative samples are weighted by
+    their current model scores. This focuses training on "hard negatives" that
+    the model currently confuses with true answers.
+    
+    Loss formula:
+        L = -log σ(γ - d_pos) - Σ p(neg_i) * log σ(d_neg_i - γ)
+    
+    Where:
+        - d_pos, d_neg_i are distances (lower = better)
+        - γ is the margin
+        - p(neg_i) = softmax(α * d_neg_i) are self-adversarial weights
+        - α is the temperature for weighting
+    """
+    
+    def __init__(self, margin=9.0, adversarial_temperature=1.0):
+        """
+        Args:
+            margin: Fixed margin γ (RotatE uses 9.0 for distance-based scoring)
+            adversarial_temperature: Temperature α for self-adversarial weighting
+                                    Higher = more uniform, Lower = focus on hardest negatives
+        """
+        super().__init__()
+        self.margin = margin
+        self.adversarial_temperature = adversarial_temperature
+        
+    def forward(self, predicted_tail, positive_tail, negative_tails):
+        """
+        Compute self-adversarial negative sampling loss.
+        
+        Args:
+            predicted_tail: [batch_size, embedding_dim] - Model predictions
+            positive_tail: [batch_size, embedding_dim] - True tail embeddings
+            negative_tails: [batch_size, num_negatives, embedding_dim] - Negative samples
+            
+        Returns:
+            loss: Scalar self-adversarial loss
+        """
+        batch_size = predicted_tail.size(0)
+        num_negatives = negative_tails.size(1)
+        
+        # Compute distances (L2 distance, lower = better)
+        # Positive distance
+        pos_distance = torch.norm(predicted_tail - positive_tail, p=2, dim=-1)  # [batch]
+        
+        # Negative distances
+        predicted_expanded = predicted_tail.unsqueeze(1)  # [batch, 1, embedding_dim]
+        neg_distances = torch.norm(predicted_expanded - negative_tails, p=2, dim=-1)  # [batch, num_negatives]
+        
+        # Self-adversarial weighting: weight negatives by their distances
+        # Higher distance = easier negative = lower weight
+        # We use softmax over negative distances with temperature
+        neg_weights = F.softmax(self.adversarial_temperature * neg_distances, dim=-1)  # [batch, num_negatives]
+        # Detach weights to prevent gradient flow through the weighting
+        neg_weights = neg_weights.detach()
+        
+        # Positive loss: -log σ(γ - d_pos) = log(1 + exp(d_pos - γ))
+        pos_loss = F.softplus(pos_distance - self.margin)
+        
+        # Negative loss: -Σ p(neg_i) * log σ(d_neg_i - γ) = Σ p(neg_i) * log(1 + exp(γ - d_neg_i))
+        neg_loss_per_sample = F.softplus(self.margin - neg_distances)  # [batch, num_negatives]
+        neg_loss = (neg_weights * neg_loss_per_sample).sum(dim=-1)  # [batch]
+        
+        # Total loss
+        loss = (pos_loss + neg_loss).mean()
+        
+        return loss
+
+
+class SelfAdversarialMarginLoss(nn.Module):
+    """
+    Self-Adversarial Margin Ranking Loss (enhanced margin loss with adversarial weighting).
+    
+    Combines traditional margin ranking with self-adversarial negative sampling.
+    Instead of treating all negatives equally, focuses on hard negatives.
+    
+    Loss formula:
+        L = Σ p(neg_i) * max(0, γ + d_pos - d_neg_i)
+    
+    Where:
+        - d_pos, d_neg_i can be distances or similarity scores
+        - γ is the margin
+        - p(neg_i) are self-adversarial weights based on current model scores
+    """
+    
+    def __init__(self, margin=1.0, adversarial_temperature=1.0, distance_based=False):
+        """
+        Args:
+            margin: Margin between positive and negative scores
+            adversarial_temperature: Temperature for self-adversarial weighting
+            distance_based: If True, use L2 distance (lower=better). If False, use similarity (higher=better)
+        """
+        super().__init__()
+        self.margin = margin
+        self.adversarial_temperature = adversarial_temperature
+        self.distance_based = distance_based
+        
+    def forward(self, predicted_tail, positive_tail, negative_tails):
+        """
+        Compute self-adversarial margin ranking loss.
+        
+        Args:
+            predicted_tail: [batch_size, embedding_dim]
+            positive_tail: [batch_size, embedding_dim]
+            negative_tails: [batch_size, num_negatives, embedding_dim]
+            
+        Returns:
+            loss: Scalar margin loss with self-adversarial weighting
+        """
+        batch_size = predicted_tail.size(0)
+        num_negatives = negative_tails.size(1)
+        
+        if self.distance_based:
+            # Distance-based (L2): lower is better
+            pos_score = torch.norm(predicted_tail - positive_tail, p=2, dim=-1)  # [batch]
+            predicted_expanded = predicted_tail.unsqueeze(1)
+            neg_scores = torch.norm(predicted_expanded - negative_tails, p=2, dim=-1)  # [batch, num_negatives]
+            
+            # Self-adversarial weighting: weight by negative distances
+            # Closer negatives (lower distance) get higher weight
+            neg_weights = F.softmax(-self.adversarial_temperature * neg_scores, dim=-1)
+            neg_weights = neg_weights.detach()
+            
+            # Margin loss: max(0, γ + d_pos - d_neg)
+            # We want d_neg > d_pos + γ (negatives should be farther away)
+            margin_loss = torch.relu(self.margin + pos_score.unsqueeze(1) - neg_scores)
+        else:
+            # Similarity-based (cosine): higher is better
+            pos_score = F.cosine_similarity(predicted_tail, positive_tail, dim=-1)  # [batch]
+            predicted_expanded = predicted_tail.unsqueeze(1).expand_as(negative_tails)
+            neg_scores = F.cosine_similarity(predicted_expanded, negative_tails, dim=-1)  # [batch, num_negatives]
+            
+            # Self-adversarial weighting: weight by negative similarities
+            # Higher similarity negatives (harder) get higher weight
+            neg_weights = F.softmax(self.adversarial_temperature * neg_scores, dim=-1)
+            neg_weights = neg_weights.detach()
+            
+            # Margin loss: max(0, γ - pos_score + neg_score)
+            # We want pos_score > neg_score + γ
+            margin_loss = torch.relu(self.margin - pos_score.unsqueeze(1) + neg_scores)
+        
+        # Weighted loss
+        weighted_loss = (neg_weights * margin_loss).sum(dim=-1)  # [batch]
+        
+        return weighted_loss.mean()
+
+
 if __name__ == "__main__":
     # Test the model
     print("Testing GWM-RNN-KG Model...")

@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
 
-from model import GWM_RNN, InfoNCELoss, MarginRankingLoss
+from model import GWM_RNN, InfoNCELoss, MarginRankingLoss, SelfAdversarialLoss, SelfAdversarialMarginLoss
 from dataset import load_kg_data, create_dataloaders
 from utils import (compute_ranks, evaluate_epoch, format_metrics, 
                    EarlyStopping, save_checkpoint, plot_training_curves, 
@@ -184,6 +184,26 @@ def main(args):
     elif args.loss == 'margin':
         loss_fn = MarginRankingLoss(margin=args.margin)
         print(f"Loss: Margin Ranking (margin={args.margin})")
+    elif args.loss == 'self_adversarial':
+        loss_fn = SelfAdversarialLoss(
+            margin=args.margin,
+            adversarial_temperature=args.adversarial_temperature
+        )
+        print(f"Loss: Self-Adversarial Negative Sampling (RotatE-style)")
+        print(f"  Margin: {args.margin}")
+        print(f"  Adversarial temperature: {args.adversarial_temperature}")
+        print(f"  Using L2 distance scoring (lower = better)")
+    elif args.loss == 'self_adversarial_margin':
+        loss_fn = SelfAdversarialMarginLoss(
+            margin=args.margin,
+            adversarial_temperature=args.adversarial_temperature,
+            distance_based=args.distance_based
+        )
+        score_type = "L2 distance" if args.distance_based else "cosine similarity"
+        print(f"Loss: Self-Adversarial Margin Ranking")
+        print(f"  Margin: {args.margin}")
+        print(f"  Adversarial temperature: {args.adversarial_temperature}")
+        print(f"  Scoring: {score_type}")
     else:
         raise ValueError(f"Unknown loss: {args.loss}")
     
@@ -418,9 +438,15 @@ if __name__ == "__main__":
     parser.add_argument('--num_negatives', type=int, default=10, help='Number of negative samples per positive')
     
     # Loss function
-    parser.add_argument('--loss', type=str, default='infonce', choices=['infonce', 'margin'], help='Loss function')
+    parser.add_argument('--loss', type=str, default='infonce', 
+                        choices=['infonce', 'margin', 'self_adversarial', 'self_adversarial_margin'], 
+                        help='Loss function')
     parser.add_argument('--temperature', type=float, default=0.07, help='Temperature for InfoNCE loss')
     parser.add_argument('--margin', type=float, default=1.0, help='Margin for ranking loss')
+    parser.add_argument('--adversarial_temperature', type=float, default=1.0, 
+                        help='Temperature for self-adversarial weighting (higher=more uniform)')
+    parser.add_argument('--distance_based', action='store_true', 
+                        help='Use L2 distance instead of cosine similarity for self-adversarial margin loss')
     parser.add_argument('--use_in_batch_negatives', action='store_true', help='Use in-batch negatives (only for InfoNCE)')
     
     # Optimization
