@@ -150,6 +150,7 @@ class KGCompletionDataset(Dataset):
             negative_tail_embs = self.entity_embeddings[negative_tail_ids]
         else:
             # For validation/test, we'll do full ranking, so no negatives needed during data loading
+            negative_tail_ids = torch.zeros(self.num_negatives, dtype=torch.long)
             negative_tail_embs = torch.zeros(self.num_negatives, self.entity_embeddings.size(1))
         
         return {
@@ -157,6 +158,7 @@ class KGCompletionDataset(Dataset):
             'relation_emb': relation_emb,
             'positive_tail_emb': positive_tail_emb,
             'negative_tail_embs': negative_tail_embs,
+            'negative_tail_ids': negative_tail_ids,
             'head_id': h_id.item() if isinstance(h_id, torch.Tensor) else h_id,
             'relation_id': r_id.item() if isinstance(r_id, torch.Tensor) else r_id,
             'tail_id': t_id.item() if isinstance(t_id, torch.Tensor) else t_id,

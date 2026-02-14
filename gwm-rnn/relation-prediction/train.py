@@ -50,18 +50,40 @@ def train_one_epoch(
         # Get entity/relation IDs for hybrid embeddings (REQUIRED)
         head_ids = torch.tensor(batch['head_id'], dtype=torch.long).to(device, non_blocking=True)
         relation_ids = torch.tensor(batch['relation_id'], dtype=torch.long).to(device, non_blocking=True)
+        tail_ids = torch.tensor(batch['tail_id'], dtype=torch.long).to(device, non_blocking=True)
         
         # Forward pass with TRAIN context (world knowledge from training graph)
         predicted_tail, _ = model(head_emb, relation_emb, head_ids, relation_ids, entity_context_train)
         
+        # Create hybrid embeddings for positive tails (BERT + learnable)
+        positive_tail_hybrid = model.get_hybrid_embeddings(tail_ids, positive_tail_emb)
+        
         # Compute loss
         # Check if loss function uses in-batch negatives
         if hasattr(loss_fn, 'use_in_batch_negatives') and loss_fn.use_in_batch_negatives:
-            loss = loss_fn(predicted_tail, positive_tail_emb)
+            loss = loss_fn(predicted_tail, positive_tail_hybrid)
         else:
-            # Use sampled negatives
+            # Use sampled negatives - create hybrid embeddings for them too
             negative_tail_embs = batch['negative_tail_embs'].to(device, non_blocking=True)
-            loss = loss_fn(predicted_tail, positive_tail_emb, negative_tail_embs)
+            negative_tail_ids = batch['negative_tail_ids'].to(device, non_blocking=True)
+            
+            # Create hybrid embeddings for each negative
+            # negative_tail_embs: [batch_size, num_negatives, embedding_dim]
+            # negative_tail_ids: [batch_size, num_negatives]
+            batch_size = negative_tail_embs.size(0)
+            num_negs = negative_tail_embs.size(1)
+            
+            # Flatten to process all negatives at once
+            neg_embs_flat = negative_tail_embs.view(-1, negative_tail_embs.size(-1))
+            neg_ids_flat = negative_tail_ids.view(-1)
+            
+            # Get hybrid embeddings
+            neg_hybrid_flat = model.get_hybrid_embeddings(neg_ids_flat, neg_embs_flat)
+            
+            # Reshape back to [batch_size, num_negatives, combined_dim]
+            negative_tail_hybrid = neg_hybrid_flat.view(batch_size, num_negs, -1)
+            
+            loss = loss_fn(predicted_tail, positive_tail_hybrid, negative_tail_hybrid)
         
         # Backward pass
         optimizer.zero_grad()
