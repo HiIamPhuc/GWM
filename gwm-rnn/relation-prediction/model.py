@@ -191,18 +191,30 @@ class GWM_RNN(nn.Module):
         # HYBRID EMBEDDINGS: Combine BERT + Learnable
         # Entity embeddings
         learnable_entity_emb = self.entity_embeddings(head_entity_ids)  # [batch, learnable_dim]
-        hybrid_head = torch.cat([head_embeddings, learnable_entity_emb], dim=-1)  # [batch, combined_dim]
+        # Normalize BERT and learnable components separately before concatenation
+        head_embeddings_norm = F.normalize(head_embeddings, p=2, dim=-1)
+        learnable_entity_emb_norm = F.normalize(learnable_entity_emb, p=2, dim=-1)
+        hybrid_head = torch.cat([head_embeddings_norm, learnable_entity_emb_norm], dim=-1)  # [batch, combined_dim]
+        # Normalize the combined embedding to unit sphere
+        hybrid_head = F.normalize(hybrid_head, p=2, dim=-1)
         
         # Relation embeddings
         learnable_relation_emb = self.relation_embeddings(relation_ids)  # [batch, learnable_dim]
-        hybrid_relation = torch.cat([relation_embeddings, learnable_relation_emb], dim=-1)  # [batch, combined_dim]
+        # Normalize BERT and learnable components separately
+        relation_embeddings_norm = F.normalize(relation_embeddings, p=2, dim=-1)
+        learnable_relation_emb_norm = F.normalize(learnable_relation_emb, p=2, dim=-1)
+        hybrid_relation = torch.cat([relation_embeddings_norm, learnable_relation_emb_norm], dim=-1)  # [batch, combined_dim]
+        # Normalize the combined embedding to unit sphere
+        hybrid_relation = F.normalize(hybrid_relation, p=2, dim=-1)
         
         # Context embeddings (keep BERT only for context, as it's computed from BERT embeddings)
-        # Note: Context is pre-computed from training graph, so we don't add learnable part
         context_embs = entity_context_embeddings[head_entity_ids]  # [batch, embedding_dim]
+        context_embs_norm = F.normalize(context_embs, p=2, dim=-1)
         # Pad context to combined_dim by concatenating zeros
         context_padding = torch.zeros(batch_size, self.learnable_dim, device=context_embs.device)
-        hybrid_context = torch.cat([context_embs, context_padding], dim=-1)  # [batch, combined_dim]
+        hybrid_context = torch.cat([context_embs_norm, context_padding], dim=-1)  # [batch, combined_dim]
+        # Normalize the combined context to unit sphere
+        hybrid_context = F.normalize(hybrid_context, p=2, dim=-1)
         
         # Project inputs to hidden dimension
         head_proj = self.input_projector(hybrid_head)  # [batch, hidden_dim]
@@ -251,8 +263,17 @@ class GWM_RNN(nn.Module):
         Returns:
             hybrid_embeddings: [batch_size, combined_dim] - Concatenated BERT + learnable
         """
+        # Normalize components before concatenation
+        bert_embeddings_norm = F.normalize(bert_embeddings, p=2, dim=-1)
         learnable_emb = self.entity_embeddings(entity_ids)  # [batch/num, learnable_dim]
-        hybrid_emb = torch.cat([bert_embeddings, learnable_emb], dim=-1)  # [batch/num, combined_dim]
+        learnable_emb_norm = F.normalize(learnable_emb, p=2, dim=-1)
+        
+        # Concatenate normalized components
+        hybrid_emb = torch.cat([bert_embeddings_norm, learnable_emb_norm], dim=-1)  # [batch/num, combined_dim]
+        
+        # Normalize the combined embedding to unit sphere
+        hybrid_emb = F.normalize(hybrid_emb, p=2, dim=-1)
+        
         return hybrid_emb
     
     def compute_similarity(self, predicted_tail, candidate_embeddings, candidate_ids=None):
@@ -279,13 +300,15 @@ class GWM_RNN(nn.Module):
             if candidate_ids is not None:
                 candidate_embeddings = self.get_hybrid_embeddings(candidate_ids, candidate_embeddings)
             else:
-                # Fallback: pad with zeros if no IDs provided (for backward compatibility)
+                # Fallback: normalize and pad with zeros if no IDs provided (for backward compatibility)
+                candidate_embeddings_norm = F.normalize(candidate_embeddings, p=2, dim=-1)
                 batch_size = predicted_tail.size(0)
                 num_candidates = candidate_embeddings.size(0)
                 padding = torch.zeros(num_candidates, self.learnable_dim, device=candidate_embeddings.device)
-                candidate_embeddings = torch.cat([candidate_embeddings, padding], dim=-1)
+                candidate_embeddings = torch.cat([candidate_embeddings_norm, padding], dim=-1)
+                candidate_embeddings = F.normalize(candidate_embeddings, p=2, dim=-1)
             
-            candidate_embeddings = F.normalize(candidate_embeddings, p=2, dim=-1)
+            # No need to normalize again as get_hybrid_embeddings already does it
             similarities = torch.matmul(predicted_tail, candidate_embeddings.t())  # [batch, num_candidates]
         else:
             # Different candidates per batch item
@@ -298,12 +321,14 @@ class GWM_RNN(nn.Module):
                 flat_hybrid = self.get_hybrid_embeddings(flat_ids, flat_bert)
                 candidate_embeddings = flat_hybrid.reshape(batch_size, num_candidates, -1)
             else:
-                # Fallback: pad with zeros
+                # Fallback: normalize and pad with zeros
+                candidate_embeddings_norm = F.normalize(candidate_embeddings, p=2, dim=-1)
                 batch_size, num_candidates = candidate_embeddings.shape[0], candidate_embeddings.shape[1]
                 padding = torch.zeros(batch_size, num_candidates, self.learnable_dim, device=candidate_embeddings.device)
-                candidate_embeddings = torch.cat([candidate_embeddings, padding], dim=-1)
+                candidate_embeddings = torch.cat([candidate_embeddings_norm, padding], dim=-1)
+                candidate_embeddings = F.normalize(candidate_embeddings, p=2, dim=-1)
             
-            candidate_embeddings = F.normalize(candidate_embeddings, p=2, dim=-1)
+            # No need to normalize again
             similarities = torch.sum(predicted_tail.unsqueeze(1) * candidate_embeddings, dim=-1)  # [batch, num_candidates]
         
         return similarities
