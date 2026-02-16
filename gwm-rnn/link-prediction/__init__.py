@@ -1,23 +1,26 @@
 """
-GWM-RNN: Resource-Efficient Graph World Model using Recurrent Neural Networks
+GWM-RNN for Knowledge Graph Completion (Relation Prediction)
 
-A lightweight alternative to LLM-based graph models with:
-- ~10-20M parameters (vs 3-8B for LLMs)
-- 100x faster inference
-- Trainable on consumer GPUs
-- Competitive performance on link prediction tasks
+A lightweight RNN-based model for knowledge graph completion that treats
+the task as trajectory generation in embedding space.
 """
 
-from .model import GWMRNN, create_gwm_rnn
-from .dataset import GWMRNNDataset, load_datasets, load_metadata, create_dataloaders
+from .model import GWM_RNN, InfoNCELoss, MarginRankingLoss
+from .dataset import KGCompletionDataset, KGEvaluationDataset, load_kg_data, create_dataloaders
+from .utils import compute_ranks, evaluate_epoch, format_metrics, EarlyStopping
+from .inference import KGPredictor
 
 __all__ = [
-    'GWMRNN',
-    'create_gwm_rnn',
-    'GWMRNNDataset',
-    'load_datasets',
-    'load_metadata',
-    'create_dataloaders'
+    'GWM_RNN',
+    'InfoNCELoss',
+    'MarginRankingLoss',
+    'KGCompletionDataset',
+    'KGEvaluationDataset',
+    'load_kg_data',
+    'create_dataloaders',
+    'compute_ranks',
+    'evaluate_epoch',
+    'format_metrics',
+    'EarlyStopping',
+    'KGPredictor',
 ]
-
-__version__ = '1.0.0'
