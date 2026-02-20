@@ -13,58 +13,6 @@ from pathlib import Path
 import json
 from typing import Dict, List, Tuple, Optional
 
-def generate_fixed_negatives(
-    triples: torch.Tensor,
-    num_entities: int,
-    num_negatives: int = 10,
-    seed: int = 42,
-    save_path: Optional[str] = None
-) -> torch.Tensor:
-    """
-    Pre-generate fixed negative samples for all training triples.
-    
-    This ensures all model variants use the same negative samples,
-    making comparisons more fair and reducing variance.
-    
-    Args:
-        triples: [num_triples, 3] tensor of (head, relation, tail)
-        num_entities: Total number of entities
-        num_negatives: Number of negatives per positive
-        seed: Random seed for reproducibility
-        save_path: If provided, save negatives to this path
-        
-    Returns:
-        negatives: [num_triples, num_negatives] tensor of negative tail IDs
-    """
-    print(f"Generating fixed negative samples (seed={seed})...")
-    np.random.seed(seed)
-    
-    num_triples = len(triples)
-    negatives = torch.zeros(num_triples, num_negatives, dtype=torch.long)
-    
-    for idx in range(num_triples):
-        h_id, r_id, t_id = triples[idx]
-        t_id = t_id.item() if isinstance(t_id, torch.Tensor) else t_id
-        
-        negative_ids = []
-        while len(negative_ids) < num_negatives:
-            neg_id = np.random.randint(0, num_entities)
-            # Avoid sampling the true tail
-            if neg_id != t_id:
-                negative_ids.append(neg_id)
-        
-        negatives[idx] = torch.tensor(negative_ids, dtype=torch.long)
-        
-        if (idx + 1) % 50000 == 0:
-            print(f"  Generated negatives for {idx + 1:,}/{num_triples:,} triples")
-    
-    if save_path:
-        torch.save(negatives, save_path)
-        print(f"✓ Saved fixed negatives to: {save_path}")
-    
-    print(f"✓ Generated {num_triples:,} × {num_negatives} negative samples")
-    return negatives
-
 
 class KGCompletionDataset(Dataset):
     """
