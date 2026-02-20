@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
 
-from model import GWM_RNN, InfoNCELoss, MarginRankingLoss
+from model import GWM_RNN, InfoNCELoss, MarginRankingLoss, SelfAdversarialLoss, SelfAdversarialMarginLoss
 from dataset import load_kg_data, create_dataloaders
 from utils import (compute_ranks, evaluate_epoch, format_metrics, 
                    EarlyStopping, save_checkpoint, plot_training_curves, 
@@ -47,20 +47,43 @@ def train_one_epoch(
         relation_emb = batch['relation_emb'].to(device, non_blocking=True)
         positive_tail_emb = batch['positive_tail_emb'].to(device, non_blocking=True)
         
-        # Get head entity IDs for context lookup (always required)
+        # Get entity/relation IDs for hybrid embeddings (REQUIRED)
         head_ids = torch.tensor(batch['head_id'], dtype=torch.long).to(device, non_blocking=True)
+        relation_ids = torch.tensor(batch['relation_id'], dtype=torch.long).to(device, non_blocking=True)
+        tail_ids = torch.tensor(batch['tail_id'], dtype=torch.long).to(device, non_blocking=True)
         
         # Forward pass with TRAIN context (world knowledge from training graph)
-        predicted_tail, _ = model(head_emb, relation_emb, head_ids, entity_context_train)
+        predicted_tail, _ = model(head_emb, relation_emb, head_ids, relation_ids, entity_context_train)
+        
+        # Create hybrid embeddings for positive tails (BERT + learnable)
+        positive_tail_hybrid = model.get_hybrid_embeddings(tail_ids, positive_tail_emb)
         
         # Compute loss
         # Check if loss function uses in-batch negatives
         if hasattr(loss_fn, 'use_in_batch_negatives') and loss_fn.use_in_batch_negatives:
-            loss = loss_fn(predicted_tail, positive_tail_emb)
+            loss = loss_fn(predicted_tail, positive_tail_hybrid)
         else:
-            # Use sampled negatives
+            # Use sampled negatives - create hybrid embeddings for them too
             negative_tail_embs = batch['negative_tail_embs'].to(device, non_blocking=True)
-            loss = loss_fn(predicted_tail, positive_tail_emb, negative_tail_embs)
+            negative_tail_ids = batch['negative_tail_ids'].to(device, non_blocking=True)
+            
+            # Create hybrid embeddings for each negative
+            # negative_tail_embs: [batch_size, num_negatives, embedding_dim]
+            # negative_tail_ids: [batch_size, num_negatives]
+            batch_size = negative_tail_embs.size(0)
+            num_negs = negative_tail_embs.size(1)
+            
+            # Flatten to process all negatives at once
+            neg_embs_flat = negative_tail_embs.view(-1, negative_tail_embs.size(-1))
+            neg_ids_flat = negative_tail_ids.view(-1)
+            
+            # Get hybrid embeddings
+            neg_hybrid_flat = model.get_hybrid_embeddings(neg_ids_flat, neg_embs_flat)
+            
+            # Reshape back to [batch_size, num_negatives, combined_dim]
+            negative_tail_hybrid = neg_hybrid_flat.view(batch_size, num_negs, -1)
+            
+            loss = loss_fn(predicted_tail, positive_tail_hybrid, negative_tail_hybrid)
         
         # Backward pass
         optimizer.zero_grad()
@@ -123,13 +146,17 @@ def main(args):
     print("BUILDING MODEL")
     print("="*70)
     
-    # Create model (contexts passed dynamically in forward())
+    # Create model with HYBRID EMBEDDINGS (contexts passed dynamically in forward())
     model = GWM_RNN(
+        num_entities=data_dict['num_entities'],
+        num_relations=data_dict['num_relations'],
         embedding_dim=data_dict['embedding_dim'],
+        learnable_dim=args.learnable_dim,
         hidden_dim=args.hidden_dim,
         num_lstm_layers=args.num_lstm_layers,
         dropout=args.dropout,
-        pooling=args.pooling
+        pooling=args.pooling,
+        hybrid_weight=args.hybrid_weight
     ).to(device)
     
     # Move context embeddings to device
@@ -139,9 +166,11 @@ def main(args):
     
     print(f"Model parameters: {model.get_num_params():,}")
     print(f"Hidden dim: {args.hidden_dim}")
+    print(f"Learnable dim: {args.learnable_dim}")
     print(f"LSTM layers: {args.num_lstm_layers}")
     print(f"Pooling: {args.pooling}")
     print(f"Dropout: {args.dropout}")
+    print(f"Hybrid weight: {args.hybrid_weight}")
     
     # Loss function
     if args.loss == 'infonce':
@@ -155,6 +184,26 @@ def main(args):
     elif args.loss == 'margin':
         loss_fn = MarginRankingLoss(margin=args.margin)
         print(f"Loss: Margin Ranking (margin={args.margin})")
+    elif args.loss == 'self_adversarial':
+        loss_fn = SelfAdversarialLoss(
+            margin=args.margin,
+            adversarial_temperature=args.adversarial_temperature
+        )
+        print(f"Loss: Self-Adversarial Negative Sampling (RotatE-style)")
+        print(f"  Margin: {args.margin}")
+        print(f"  Adversarial temperature: {args.adversarial_temperature}")
+        print(f"  Using L2 distance scoring (lower = better)")
+    elif args.loss == 'self_adversarial_margin':
+        loss_fn = SelfAdversarialMarginLoss(
+            margin=args.margin,
+            adversarial_temperature=args.adversarial_temperature,
+            distance_based=args.distance_based
+        )
+        score_type = "L2 distance" if args.distance_based else "cosine similarity"
+        print(f"Loss: Self-Adversarial Margin Ranking")
+        print(f"  Margin: {args.margin}")
+        print(f"  Adversarial temperature: {args.adversarial_temperature}")
+        print(f"  Scoring: {score_type}")
     else:
         raise ValueError(f"Unknown loss: {args.loss}")
     
@@ -376,6 +425,10 @@ if __name__ == "__main__":
     parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
     parser.add_argument('--pooling', type=str, default='last', choices=['last', 'mean', 'max'], help='Pooling method')
     
+    # Hybrid embeddings
+    parser.add_argument('--learnable_dim', type=int, default=768, help='Dimension of learnable embeddings (for geometric patterns)')
+    parser.add_argument('--hybrid_weight', type=float, default=0.5, help='Weight for BERT vs learnable (0.5 = equal weight)')
+    
     # Training
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
@@ -385,9 +438,15 @@ if __name__ == "__main__":
     parser.add_argument('--num_negatives', type=int, default=10, help='Number of negative samples per positive')
     
     # Loss function
-    parser.add_argument('--loss', type=str, default='infonce', choices=['infonce', 'margin'], help='Loss function')
+    parser.add_argument('--loss', type=str, default='infonce', 
+                        choices=['infonce', 'margin', 'self_adversarial', 'self_adversarial_margin'], 
+                        help='Loss function')
     parser.add_argument('--temperature', type=float, default=0.07, help='Temperature for InfoNCE loss')
     parser.add_argument('--margin', type=float, default=1.0, help='Margin for ranking loss')
+    parser.add_argument('--adversarial_temperature', type=float, default=1.0, 
+                        help='Temperature for self-adversarial weighting (higher=more uniform)')
+    parser.add_argument('--distance_based', action='store_true', 
+                        help='Use L2 distance instead of cosine similarity for self-adversarial margin loss')
     parser.add_argument('--use_in_batch_negatives', action='store_true', help='Use in-batch negatives (only for InfoNCE)')
     
     # Optimization

@@ -28,22 +28,23 @@ def compute_ranks(
     entity2id: Optional[Dict] = None
 ) -> Dict[str, float]:
     """
-    Compute ranking metrics for knowledge graph completion (Context-Aware).
+    Compute ranking metrics for knowledge graph completion with HYBRID embeddings (Context-Aware).
     
-    WORLD MODEL ARCHITECTURE:
-    Model uses split-specific context embeddings for evaluation.
+    WORLD MODEL ARCHITECTURE + HYBRID EMBEDDINGS:
+    Model uses split-specific context embeddings AND hybrid (BERT + learnable) embeddings.
     Context = neighborhood summary (neighbors + relations) from corresponding split.
     
     For each test triple (h, r, t):
-    1. Generate prediction for (h, r, ?) with context(h) from correct split
-    2. Rank all entities by similarity
-    3. Find rank of true tail t
-    4. Optionally filter out other valid tails
+    1. Create hybrid embedding: h_hybrid = concat([BERT(h), learnable(h)])
+    2. Generate prediction for (h, r, ?) with context(h) from correct split
+    3. Rank all entities by similarity (using hybrid embeddings)
+    4. Find rank of true tail t
+    5. Optionally filter out other valid tails
     
     Args:
-        model: Trained Context-Aware GWM-RNN-KG model
+        model: Trained Hybrid Context-Aware GWM-RNN model
         dataloader: Evaluation dataloader (KGEvaluationDataset)
-        all_entity_embeddings: [num_entities, embedding_dim] for ranking
+        all_entity_embeddings: [num_entities, embedding_dim] BERT embeddings for ranking
         entity_context_embeddings: [num_entities, embedding_dim] - Context for this split (train/valid/test)
         device: Device for computation
         filtered: If True, use filtered ranking (exclude other valid tails)
@@ -64,6 +65,10 @@ def compute_ranks(
     if save_predictions and entity2id:
         id2entity = {v: k for k, v in entity2id.items()}
     
+    # Get all entity IDs for hybrid embedding lookup
+    num_entities = all_entity_embeddings.size(0)
+    all_entity_ids = torch.arange(num_entities, dtype=torch.long).to(device)
+    
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating"):
             head_emb = batch['head_emb'].to(device)
@@ -73,17 +78,20 @@ def compute_ranks(
             
             batch_size = head_emb.size(0)
             
-            # Get head entity IDs for context lookup (always required)
+            # Get entity/relation IDs for hybrid embeddings (REQUIRED)
             head_ids = torch.tensor([batch['head_id'][i] for i in range(batch_size)], 
                                    dtype=torch.long).to(device)
+            relation_ids = torch.tensor([batch['relation_id'][i] for i in range(batch_size)], 
+                                       dtype=torch.long).to(device)
             
-            # Generate predictions with split-specific context
-            predicted_tail, _ = model(head_emb, relation_emb, head_ids, entity_context_embeddings)
+            # Generate predictions with hybrid embeddings and split-specific context
+            predicted_tail, _ = model(head_emb, relation_emb, head_ids, relation_ids, entity_context_embeddings)
             
-            # Compute similarity with ALL entities
+            # Compute similarity with ALL entities (using hybrid embeddings)
             similarities = model.compute_similarity(
                 predicted_tail, 
-                all_entity_embeddings
+                all_entity_embeddings,
+                all_entity_ids
             )  # [batch, num_entities]
             
             # Apply filtering if requested
