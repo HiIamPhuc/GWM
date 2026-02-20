@@ -296,6 +296,69 @@ def load_kg_data(data_dir: str, device: str = 'cpu'):
         print(f"  Negatives will be sampled on-the-fly (may cause variance across runs)")
         print(f"  To generate fixed negatives, see dataset.generate_fixed_negatives()")
     
+    # Load entity context embeddings for all splits (REQUIRED for context-aware model)
+    # World model requires independent contexts: train/valid/test
+    entity_context_train = None
+    entity_context_valid = None
+    entity_context_test = None
+    
+    working_dir = Path('/kaggle/working')
+    
+    # Try loading train context
+    train_paths = [
+        working_dir / 'entity_context_embeddings_train.pt',
+        data_dir / 'entity_context_embeddings_train.pt'
+    ]
+    for path in train_paths:
+        if path.exists():
+            print(f"Loading train context embeddings from {path}")
+            entity_context_train = torch.load(path, map_location='cpu')
+            print(f"✓ Loaded train context: {entity_context_train.shape}")
+            break
+    
+    # Try loading valid context
+    valid_paths = [
+        working_dir / 'entity_context_embeddings_valid.pt',
+        data_dir / 'entity_context_embeddings_valid.pt'
+    ]
+    for path in valid_paths:
+        if path.exists():
+            print(f"Loading valid context embeddings from {path}")
+            entity_context_valid = torch.load(path, map_location='cpu')
+            print(f"✓ Loaded valid context: {entity_context_valid.shape}")
+            break
+    
+    # Try loading test context
+    test_paths = [
+        working_dir / 'entity_context_embeddings_test.pt',
+        data_dir / 'entity_context_embeddings_test.pt'
+    ]
+    for path in test_paths:
+        if path.exists():
+            print(f"Loading test context embeddings from {path}")
+            entity_context_test = torch.load(path, map_location='cpu')
+            print(f"✓ Loaded test context: {entity_context_test.shape}")
+            break
+    
+    # Check if all contexts were found
+    if entity_context_train is None or entity_context_valid is None or entity_context_test is None:
+        missing = []
+        if entity_context_train is None: missing.append('train')
+        if entity_context_valid is None: missing.append('valid')
+        if entity_context_test is None: missing.append('test')
+        
+        error_msg = (
+            f"❌ ERROR: Context embeddings not found for splits: {', '.join(missing)}\n"
+            f"  This model requires split-specific context embeddings.\n"
+            f"  Expected files:\n"
+            f"    - entity_context_embeddings_train.pt\n"
+            f"    - entity_context_embeddings_valid.pt\n"
+            f"    - entity_context_embeddings_test.pt\n\n"
+            f"  To generate context embeddings, run:\n"
+            f"    python generate_context_embeddings.py --data_dir {data_dir}\n"
+        )
+        raise FileNotFoundError(error_msg)
+    
     # Load ground truth (for filtered evaluation)
     ground_truth = None
     if (data_dir / 'ground_truth.json').exists():
@@ -314,6 +377,9 @@ def load_kg_data(data_dir: str, device: str = 'cpu'):
     return {
         'entity_embeddings': entity_embeddings,
         'relation_embeddings': relation_embeddings,
+        'entity_context_train': entity_context_train,  # Split-specific contexts
+        'entity_context_valid': entity_context_valid,
+        'entity_context_test': entity_context_test,
         'train_triples': train_triples,
         'valid_triples': valid_triples,
         'test_triples': test_triples,
