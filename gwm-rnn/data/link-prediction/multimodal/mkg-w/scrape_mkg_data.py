@@ -244,11 +244,11 @@ def main():
     
     # Image downloading options
     parser.add_argument('--download_images', action='store_true',
-                        help='Download images from Wikidata')
-    parser.add_argument('--image_sample', type=int, default=50,
-                        help='Sample only N entities for image downloads (default: 50)')
+                        help='Download images from Wikidata (downloads all by default)')
+    parser.add_argument('--image_sample', type=int, default=None,
+                        help='Limit to first N entities for image downloads (default: None = all entities)')
     parser.add_argument('--max_images', type=int, default=None,
-                        help='Maximum number of images to download (None = all)')
+                        help='Maximum number of images to successfully download (default: None = no limit)')
     
     args = parser.parse_args()
     
@@ -355,16 +355,16 @@ def main():
         # Determine which entities to process
         if args.image_sample:
             entities_to_process = entities[:args.image_sample]
-            print(f"  Processing sample of {len(entities_to_process):,} entities")
+            print(f"  Processing sample of {len(entities_to_process):,} entities...")
         else:
             entities_to_process = entities
-            print(f"  Processing all {len(entities_to_process):,} entities")
+            print(f"  Processing all {len(entities_to_process):,} entities...")
         
         downloaded_count = 0
-        max_images = args.max_images if args.max_images else len(entities_to_process)
         
         for entity_uri in tqdm(entities_to_process, desc="  Querying and downloading"):
-            if downloaded_count >= max_images:
+            # Stop if we've reached max_images limit
+            if args.max_images and downloaded_count >= args.max_images:
                 break
             
             entity_id = entity2id[entity_uri]
@@ -380,7 +380,6 @@ def main():
             image_url = query_wikidata_for_image(entity_uri)
             
             if image_url:
-                print(f"Extracted image for {entity_uri}: {image_url}")
                 # Try to download
                 if download_and_save_image(image_url, image_path):
                     image_info[entity_id] = f"images/entity_{entity_id}.jpg"

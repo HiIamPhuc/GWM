@@ -268,11 +268,11 @@ def main():
     
     # Image downloading options
     parser.add_argument('--download_images', action='store_true',
-                        help='Download images from DBpedia')
-    parser.add_argument('--image_sample', type=int, default=50,
-                        help='Sample only N entities for image downloads (default: 50)')
+                        help='Download images from DBpedia (downloads all by default)')
+    parser.add_argument('--image_sample', type=int, default=None,
+                        help='Limit to first N entities for image downloads (default: None = all entities)')
     parser.add_argument('--max_images', type=int, default=None,
-                        help='Maximum number of images to download (None = all)')
+                        help='Maximum number of images to successfully download (default: None = no limit)')
     
     args = parser.parse_args()
     
@@ -367,14 +367,20 @@ def main():
         image_cache_dir = output_dir / 'images'
         image_cache_dir.mkdir(exist_ok=True)
         
-        num_to_process = min(args.image_sample, len(entities))
-        if args.max_images:
-            num_to_process = min(num_to_process, args.max_images)
-        
-        print(f"  Processing {num_to_process:,} entities...")
+        # Determine how many entities to process
+        if args.image_sample:
+            num_to_process = min(args.image_sample, len(entities))
+            print(f"  Processing sample of {num_to_process:,} entities...")
+        else:
+            num_to_process = len(entities)
+            print(f"  Processing all {num_to_process:,} entities...")
         
         success_count = 0
         for entity_id in tqdm(range(num_to_process), desc="  Querying & downloading"):
+            # Stop if we've reached max_images limit
+            if args.max_images and success_count >= args.max_images:
+                break
+                
             entity_uri = entities[entity_id]
             image_path = image_cache_dir / f"{entity_id}.jpg"
             
@@ -392,7 +398,7 @@ def main():
                     success_count += 1
         
         print(f"  ✓ Downloaded {success_count:,} images")
-        print(f"  Coverage: {success_count/num_to_process*100:.1f}%")
+        print(f"  Coverage: {success_count/len(entities)*100:.1f}%")
     else:
         print("\n[4/5] Skipping image downloads (use --download_images to enable)")
     
