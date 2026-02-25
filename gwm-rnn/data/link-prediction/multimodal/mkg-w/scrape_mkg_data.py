@@ -317,7 +317,6 @@ def main():
         
         for i, entity_uri in enumerate(tqdm(entities[:sample_size], desc="  Entities")):
             text = extract_text_from_wikidata_sparql(entity_uri)
-            print(f"Extracted text for entity {entity_uri}: {text}")
             entity_texts.append(text)
         
         # Use URI extraction for remaining
@@ -331,7 +330,6 @@ def main():
         print("  Extracting relation texts via SPARQL...")
         for relation_uri in tqdm(relations, desc="  Relations"):
             text = extract_text_from_wikidata_sparql(relation_uri)
-            print(f"Extracted text for relation {relation_uri}: {text}")
             relation_texts.append(text)
     else:
         for relation_uri in tqdm(relations, desc="  Relations"):
