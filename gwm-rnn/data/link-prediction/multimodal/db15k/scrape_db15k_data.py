@@ -360,6 +360,7 @@ def main():
     # STEP 4: Download images (optional)
     # ========================================================================
     image_info = {}
+    image_urls = {}
     
     if args.download_images:
         print("\n[4/5] Downloading images from DBpedia...")
@@ -375,13 +376,31 @@ def main():
             num_to_process = len(entities)
             print(f"  Processing all {num_to_process:,} entities...")
         
-        success_count = 0
-        for entity_id in tqdm(range(num_to_process), desc="  Querying & downloading"):
-            # Stop if we've reached max_images limit
-            if args.max_images and success_count >= args.max_images:
-                break
-                
+        # Phase 1: Query all image URLs
+        print(f"  Phase 1: Querying image URLs...")
+        for entity_id in tqdm(range(num_to_process), desc="  Querying URLs"):
             entity_uri = entities[entity_id]
+            image_url = query_dbpedia_for_image(entity_uri)
+            if image_url:
+                image_urls[entity_id] = image_url
+        
+        print(f"  ✓ Found {len(image_urls):,} image URLs")
+        
+        # Save URLs immediately as backup
+        with open(output_dir / 'image_urls.json', 'w', encoding='utf-8') as f:
+            json.dump(image_urls, f, indent=2)
+        print(f"  ✓ Saved URLs to image_urls.json")
+        
+        # Phase 2: Download images from saved URLs
+        print(f"  Phase 2: Downloading images...")
+        success_count = 0
+        items_to_download = list(image_urls.items())
+        
+        # Apply max_images limit if specified
+        if args.max_images:
+            items_to_download = items_to_download[:args.max_images]
+        
+        for entity_id, image_url in tqdm(items_to_download, desc="  Downloading"):
             image_path = image_cache_dir / f"{entity_id}.jpg"
             
             # Check if already cached
@@ -390,12 +409,10 @@ def main():
                 success_count += 1
                 continue
             
-            # Query and download
-            image_url = query_dbpedia_for_image(entity_uri)
-            if image_url:
-                if download_and_save_image(image_url, image_path):
-                    image_info[entity_id] = str(image_path.relative_to(output_dir))
-                    success_count += 1
+            # Download image
+            if download_and_save_image(image_url, image_path):
+                image_info[entity_id] = str(image_path.relative_to(output_dir))
+                success_count += 1
         
         print(f"  ✓ Downloaded {success_count:,} images")
         print(f"  Coverage: {success_count/len(entities)*100:.1f}%")
@@ -448,6 +465,7 @@ def main():
         'num_test_triples': len(test_triples),
         'text_extraction_mode': args.text_mode,
         'images_downloaded': args.download_images,
+        'num_image_urls': len(image_urls),
         'num_images': len(image_info),
         'image_coverage': len(image_info) / len(entities) if entities else 0.0,
     }
