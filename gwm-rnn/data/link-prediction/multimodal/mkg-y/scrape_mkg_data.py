@@ -106,7 +106,7 @@ def clean_label(label):
     return label if label else original_label
 
 
-def search_wikidata_for_entity(label, timeout=10):
+def search_wikidata_for_entity(label, timeout=10, rate_limit_delay=0.3, max_retries=3):
     """
     Search Wikidata for an entity by label and return Q-number and description.
     Returns: (q_number, description) or (None, None)
@@ -129,28 +129,43 @@ def search_wikidata_for_entity(label, timeout=10):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
     
-    try:
-        response = requests.get(search_url, params=params, headers=headers, timeout=timeout)
-        response.raise_for_status()
-        data = response.json()
-        
-        # Check if we got results
-        if data.get('search') and len(data['search']) > 0:
-            result = data['search'][0]
-            q_number = result.get('id')
-            description = result.get('description', '')
-            label_text = result.get('label', search_label)
+    for attempt in range(max_retries):
+        try:
+            # Rate limiting before each request
+            time.sleep(rate_limit_delay)
             
-            if description:
-                return q_number, f"{label_text} ({description})"
+            response = requests.get(search_url, params=params, headers=headers, timeout=timeout)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Check if we got results
+            if data.get('search') and len(data['search']) > 0:
+                result = data['search'][0]
+                q_number = result.get('id')
+                description = result.get('description', '')
+                label_text = result.get('label', search_label)
+                
+                if description:
+                    return q_number, f"{label_text} ({description})"
+                else:
+                    return q_number, label_text
+            break  # No results found, don't retry
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 403:  # Rate limited
+                if attempt < max_retries - 1:
+                    wait_time = rate_limit_delay * (2 ** (attempt + 1))  # Exponential backoff
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Final attempt failed, suppress verbose error
+                    pass
             else:
-                return q_number, label_text
-    except requests.exceptions.RequestException as e:
-        print(f"  Warning: Request failed for '{search_label}': {e}")
-    except (KeyError, ValueError, IndexError) as e:
-        print(f"  Warning: Failed to parse response for '{search_label}': {e}")
-    except Exception as e:
-        print(f"  Warning: Unexpected error for '{search_label}': {e}")
+                break  # Other HTTP errors, don't retry
+        except requests.exceptions.RequestException:
+            break  # Connection errors, don't retry
+        except (KeyError, ValueError, IndexError):
+            break  # Parse errors, don't retry
     
     return None, None
 
@@ -177,10 +192,8 @@ def extract_text_from_label(label, use_wikidata=False, is_relation=False, timeou
     
     # For entities, optionally query Wikidata
     if use_wikidata:
-        time.sleep(0.05)  # Rate limiting
         q_number, description = search_wikidata_for_entity(label, timeout)
         if description:
-            print(f"Found Wikidata description for '{label}': {description}")
             return description, True
         else:
             print(f"No Wikidata description found for '{label}', using cleaned label")
@@ -193,7 +206,7 @@ def extract_text_from_label(label, use_wikidata=False, is_relation=False, timeou
 # IMAGE DOWNLOADING
 # ============================================================================
 
-def get_wikidata_qnumber(label, timeout=10):
+def get_wikidata_qnumber(label, timeout=10, rate_limit_delay=0.3):
     """Get Wikidata Q-number for an entity label."""
     search_label = clean_label(label)
     search_url = "https://www.wikidata.org/w/api.php"
@@ -211,6 +224,9 @@ def get_wikidata_qnumber(label, timeout=10):
     }
     
     try:
+        # Rate limiting
+        time.sleep(rate_limit_delay)
+        
         response = requests.get(search_url, params=params, headers=headers, timeout=timeout)
         response.raise_for_status()
         data = response.json()
@@ -238,6 +254,15 @@ def query_wikidata_for_image(label, timeout=10):
         return None
     
     entity_uri = f"http://www.wikidata.org/entity/{q_number}"
+    return query_wikidata_sparql_for_image(entity_uri, timeout)
+
+
+def query_wikidata_sparql_for_image(entity_uri, timeout=10):
+    """Query Wikidata SPARQL endpoint for entity image URL given entity URI."""
+    try:
+        from SPARQLWrapper import SPARQLWrapper, JSON
+    except ImportError:
+        return None
     
     query = f"""
     SELECT ?image WHERE {{
@@ -313,6 +338,8 @@ def main():
                         help='Text extraction method: label_only (fast) or wikidata_search (slow, detailed)')
     parser.add_argument('--text_sample', type=int, default=None,
                         help='Sample only N entities for Wikidata queries (for testing)')
+    parser.add_argument('--rate_limit', type=float, default=0.3,
+                        help='Delay between Wikidata API requests in seconds (default: 0.3, ~3 req/sec)')
     
     # Image downloading options
     parser.add_argument('--download_images', action='store_true',
@@ -335,7 +362,11 @@ def main():
     print(f"Input: {data_dir}")
     print(f"Output: {output_dir}")
     print(f"Text mode: {args.text_mode}")
+    if args.text_mode == 'wikidata_search':
+        print(f"Rate limit: {args.rate_limit}s delay (~{1/args.rate_limit:.1f} req/sec)")
     print(f"Download images: {args.download_images}")
+    if args.download_images:
+        print(f"Image rate limit: {args.rate_limit}s delay (~{1/args.rate_limit:.1f} req/sec)")
     print("="*70)
     
     # ========================================================================
@@ -393,12 +424,18 @@ def main():
         print(f"  Method: Wikidata search (slow)")
         sample_size = args.text_sample if args.text_sample else len(entities)
         print(f"  Processing {sample_size:,} entities with Wikidata...")
+        print(f"  Rate limit: {args.rate_limit}s delay (~{1/args.rate_limit:.1f} requests/sec)")
         
         for entity_label in tqdm(entities[:sample_size], desc="  Entities (Wikidata)"):
-            text, found = extract_text_from_label(entity_label, use_wikidata=True, is_relation=False)
-            entity_texts.append(text)
-            if found:
+            # Pass rate limit to search function
+            q_number, description = search_wikidata_for_entity(entity_label, timeout=10, rate_limit_delay=args.rate_limit)
+            if description:
+                entity_texts.append(description)
                 wikidata_found_count += 1
+            else:
+                # Fallback to cleaned label
+                text, _ = extract_text_from_label(entity_label, use_wikidata=False, is_relation=False)
+                entity_texts.append(text)
         
         # Use simple extraction for remaining
         if sample_size < len(entities):
@@ -446,11 +483,16 @@ def main():
         
         # Phase 1: Query all image URLs
         print(f"  Phase 1: Querying image URLs...")
+        print(f"  Rate limit: {args.rate_limit}s delay per request")
         for entity_label in tqdm(entities_to_process, desc="  Querying URLs"):
             entity_id = entity2id[entity_label]
-            image_url = query_wikidata_for_image(entity_label)
-            if image_url:
-                image_urls[entity_id] = image_url
+            # Pass rate limit to image query
+            q_number = get_wikidata_qnumber(entity_label, timeout=10, rate_limit_delay=args.rate_limit)
+            if q_number:
+                entity_uri = f"http://www.wikidata.org/entity/{q_number}"
+                image_url = query_wikidata_sparql_for_image(entity_uri)
+                if image_url:
+                    image_urls[entity_id] = image_url
         
         print(f"  ✓ Found {len(image_urls):,} image URLs")
         
