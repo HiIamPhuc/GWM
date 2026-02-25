@@ -48,7 +48,7 @@ def parse_triples(file_path):
             continue
         
         # Remove trailing dot
-        line = line.rstrip(' .')
+        line = line[:-2]
         parts = line.split(' ')
         
         if len(parts) < 3:
