@@ -80,21 +80,17 @@ def train_one_epoch(
             image_mask=positive_tail_image_mask
         )
         
-        # Handle negatives
-        if hasattr(loss_fn, 'use_in_batch_negatives') and loss_fn.use_in_batch_negatives:
-            # Use in-batch negatives
-            loss = loss_fn(predicted_tail, positive_tail_fused)
-        else:
-            # Use sampled negatives
-            negative_tail_text_embs = batch['negative_tail_text_embs'].to(device, non_blocking=True)
-            negative_tail_image_embs = batch['negative_tail_image_embs'].to(device, non_blocking=True)
-            negative_tail_image_masks = batch['negative_tail_image_masks'].to(device, non_blocking=True)
-            negative_tail_ids = batch['negative_tail_ids'].to(device, non_blocking=True)
-            
-            # Create fused embeddings for negatives
-            batch_size = negative_tail_text_embs.size(0)
-            num_negs = negative_tail_text_embs.size(1)
-            
+        # Handle negatives (always process if available, even for in-batch negatives)
+        negative_tail_text_embs = batch['negative_tail_text_embs'].to(device, non_blocking=True)
+        negative_tail_image_embs = batch['negative_tail_image_embs'].to(device, non_blocking=True)
+        negative_tail_image_masks = batch['negative_tail_image_masks'].to(device, non_blocking=True)
+        negative_tail_ids = batch['negative_tail_ids'].to(device, non_blocking=True)
+        
+        # Create fused embeddings for negatives
+        batch_size = negative_tail_text_embs.size(0)
+        num_negs = negative_tail_text_embs.size(1)
+        
+        if num_negs > 0:
             # Flatten to process all negatives at once
             neg_text_flat = negative_tail_text_embs.view(-1, negative_tail_text_embs.size(-1))
             neg_image_flat = negative_tail_image_embs.view(-1, negative_tail_image_embs.size(-1))
@@ -111,8 +107,13 @@ def train_one_epoch(
             
             # Reshape back to [batch_size, num_negatives, fusion_dim]
             negative_tail_fused = neg_fused_flat.view(batch_size, num_negs, -1)
-            
-            loss = loss_fn(predicted_tail, positive_tail_fused, negative_tail_fused)
+        else:
+            # No sampled negatives - create empty tensor for in-batch negatives only
+            fusion_dim = positive_tail_fused.size(-1)
+            negative_tail_fused = torch.empty(batch_size, 0, fusion_dim, device=device)
+        
+        # Compute loss (always pass 3 arguments)
+        loss = loss_fn(predicted_tail, positive_tail_fused, negative_tail_fused)
         
         # Backward pass
         optimizer.zero_grad()
