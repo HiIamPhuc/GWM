@@ -388,6 +388,11 @@ def create_multimodal_dataloaders(
         fixed_negatives = torch.load(fixed_negatives_path)
         print(f"✓ Loaded {fixed_negatives.size(0):,} × {fixed_negatives.size(1)} negatives")
     
+    # Build ground truth dictionary for filtered evaluation
+    all_triples = torch.cat([train_triples, valid_triples, test_triples], dim=0)
+    ground_truth = build_ground_truth_dict(all_triples)
+    print(f"✓ Built ground truth dictionary with {len(ground_truth):,} (h, r) pairs")
+    
     # Create datasets
     train_dataset = MultimodalKGDataset(
         triples=train_triples,
@@ -400,26 +405,22 @@ def create_multimodal_dataloaders(
         fixed_negatives=fixed_negatives
     )
     
-    valid_dataset = MultimodalKGDataset(
+    valid_dataset = MultimodalKGEvaluationDataset(
         triples=valid_triples,
         entity_text_embeddings=entity_text_embs,
         entity_image_embeddings=entity_image_embs,
         entity_image_mask=entity_image_mask,
         relation_text_embeddings=relation_text_embs,
-        num_negatives=num_negatives,
-        mode='valid',
-        fixed_negatives=None
+        ground_truth=ground_truth
     )
     
-    test_dataset = MultimodalKGDataset(
+    test_dataset = MultimodalKGEvaluationDataset(
         triples=test_triples,
         entity_text_embeddings=entity_text_embs,
         entity_image_embeddings=entity_image_embs,
         entity_image_mask=entity_image_mask,
         relation_text_embeddings=relation_text_embs,
-        num_negatives=num_negatives,
-        mode='test',
-        fixed_negatives=None
+        ground_truth=ground_truth
     )
     
     # Create dataloaders

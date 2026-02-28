@@ -91,7 +91,7 @@ def compute_ranks(
             head_image_mask = batch['head_image_mask'].to(device)
             relation_text_emb = batch['relation_text_emb'].to(device)
             tail_ids = batch['tail_id']
-            filter_masks = batch['filter_mask'] if filtered else None
+            filter_masks = batch.get('filter_mask') if filtered else None
             
             batch_size = head_text_emb.size(0)
             
