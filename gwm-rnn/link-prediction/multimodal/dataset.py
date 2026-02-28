@@ -272,9 +272,7 @@ class MultimodalKGEvaluationDataset(Dataset):
 
 
 def load_multimodal_data(
-    data_dir: str,
-    text_embedding_name: str = 'bert',
-    image_embedding_name: str = 'clip'
+    data_dir: str
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Load multimodal KG data from directory.
@@ -286,15 +284,13 @@ def load_multimodal_data(
                 valid.txt
                 test.txt
             embeddings/
-                entity_text_{text_embedding_name}.pt
-                entity_image_{image_embedding_name}.pt
+                entity_text.pt
+                entity_image.pt
                 entity_image_mask.pt
-                relation_text_{text_embedding_name}.pt
+                relation_text.pt
     
     Args:
         data_dir: Path to data directory
-        text_embedding_name: Name of text embedding model (bert, roberta, llama, etc.)
-        image_embedding_name: Name of image embedding model (clip, vit, beit, etc.)
         
     Returns:
         train_triples, valid_triples, test_triples,
@@ -309,11 +305,11 @@ def load_multimodal_data(
     test_triples = torch.load(data_dir / 'triples' / 'test.pt')
     
     # Load embeddings
-    print(f"Loading embeddings (text={text_embedding_name}, image={image_embedding_name})...")
-    entity_text_embs = torch.load(data_dir / 'embeddings' / f'entity_text_{text_embedding_name}.pt')
-    entity_image_embs = torch.load(data_dir / 'embeddings' / f'entity_image_{image_embedding_name}.pt')
+    print(f"Loading embeddings...")
+    entity_text_embs = torch.load(data_dir / 'embeddings' / 'entity_text.pt')
+    entity_image_embs = torch.load(data_dir / 'embeddings' / 'entity_image.pt')
     entity_image_mask = torch.load(data_dir / 'embeddings' / 'entity_image_mask.pt')
-    relation_text_embs = torch.load(data_dir / 'embeddings' / f'relation_text_{text_embedding_name}.pt')
+    relation_text_embs = torch.load(data_dir / 'embeddings' / 'relation_text.pt')
     
     print(f"✓ Loaded data:")
     print(f"   Entities: {entity_text_embs.size(0):,}")

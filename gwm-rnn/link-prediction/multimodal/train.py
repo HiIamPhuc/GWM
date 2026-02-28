@@ -165,9 +165,7 @@ def main(args):
     train_triples, valid_triples, test_triples, \
     entity_text_embs, entity_image_embs, entity_image_mask, \
     relation_text_embs = load_multimodal_data(
-        data_dir=args.data_dir,
-        text_embedding_name=args.text_embedding,
-        image_embedding_name=args.image_embedding
+        data_dir=args.data_dir
     )
     
     # Load metadata
@@ -504,8 +502,6 @@ if __name__ == "__main__":
     # Data
     parser.add_argument('--data_dir', type=str, required=True, help='Directory with processed multimodal data')
     parser.add_argument('--output_dir', type=str, required=True, help='Output directory for results')
-    parser.add_argument('--text_embedding', type=str, default='bert', help='Text embedding name (bert, roberta, llama)')
-    parser.add_argument('--image_embedding', type=str, default='clip', help='Image embedding name (clip, vit, beit)')
     parser.add_argument('--use_fixed_negatives', action='store_true', help='Use pre-generated fixed negatives')
     
     # Model architecture

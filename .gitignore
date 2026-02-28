@@ -1,4 +1,5 @@
 processed/
+scraped/
 __pycache__/
 raw/
 .env

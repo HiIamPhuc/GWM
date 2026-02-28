@@ -44,9 +44,7 @@ class MultimodalKGPredictor:
         train_triples, valid_triples, test_triples, \
         entity_text_embs, entity_image_embs, entity_image_mask, \
         relation_text_embs = load_multimodal_data(
-            data_dir=self.config['data_dir'],
-            text_embedding_name=self.config.get('text_embedding', 'bert'),
-            image_embedding_name=self.config.get('image_embedding', 'clip')
+            data_dir=self.config['data_dir']
         )
         
         self.entity_text_embs = entity_text_embs.to(self.device)
