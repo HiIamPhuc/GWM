@@ -162,8 +162,7 @@ def main(args):
     
     # Load multimodal data
     train_triples, valid_triples, test_triples, \
-    entity_text_embs, entity_image_embs, entity_image_mask, \
-    relation_text_embs = load_multimodal_data(
+    entity_text_embs, entity_image_embs, entity_image_mask = load_multimodal_data(
         data_dir=args.data_dir
     )
     
@@ -177,7 +176,7 @@ def main(args):
         dataset_name = Path(args.data_dir).name
     
     num_entities = entity_text_embs.size(0)
-    num_relations = relation_text_embs.size(0)
+    num_relations = metadata.get('num_relations', 'Unknown')
     text_dim = entity_text_embs.size(1)
     image_dim = entity_image_embs.size(1)
     
@@ -214,7 +213,6 @@ def main(args):
     train_loader, valid_loader, test_loader = create_multimodal_dataloaders(
         train_triples, valid_triples, test_triples,
         entity_text_embs, entity_image_embs, entity_image_mask,
-        relation_text_embs,
         batch_size=args.batch_size,
         num_negatives=args.num_negatives,
         num_workers=args.num_workers,

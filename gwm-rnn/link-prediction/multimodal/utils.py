@@ -89,7 +89,6 @@ def compute_ranks(
             head_text_emb = batch['head_text_emb'].to(device)
             head_image_emb = batch['head_image_emb'].to(device)
             head_image_mask = batch['head_image_mask'].to(device)
-            relation_text_emb = batch['relation_text_emb'].to(device)
             tail_ids = batch['tail_id']
             filter_masks = batch.get('filter_mask') if filtered else None
             
@@ -106,7 +105,6 @@ def compute_ranks(
                 head_text_emb=head_text_emb,
                 head_image_emb=head_image_emb,
                 head_image_mask=head_image_mask,
-                relation_text_emb=relation_text_emb,
                 head_entity_ids=head_ids,
                 relation_ids=relation_ids,
                 entity_context_text=entity_context_text,
@@ -223,7 +221,6 @@ def evaluate_epoch(
             head_text_emb = batch['head_text_emb'].to(device)
             head_image_emb = batch['head_image_emb'].to(device)
             head_image_mask = batch['head_image_mask'].to(device)
-            relation_text_emb = batch['relation_text_emb'].to(device)
             
             positive_tail_text_emb = batch['positive_tail_text_emb'].to(device)
             positive_tail_image_emb = batch['positive_tail_image_emb'].to(device)
@@ -244,7 +241,6 @@ def evaluate_epoch(
                 head_text_emb=head_text_emb,
                 head_image_emb=head_image_emb,
                 head_image_mask=head_image_mask,
-                relation_text_emb=relation_text_emb,
                 head_entity_ids=head_ids,
                 relation_ids=relation_ids,
                 entity_context_text=entity_context_text_train,

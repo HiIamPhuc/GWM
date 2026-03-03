@@ -196,7 +196,6 @@ class MultimodalKGEvaluationDataset(Dataset):
         entity_text_embeddings: torch.Tensor,
         entity_image_embeddings: torch.Tensor,
         entity_image_mask: torch.Tensor,
-        relation_text_embeddings: torch.Tensor,
         ground_truth: Optional[Dict] = None
     ):
         """
@@ -205,14 +204,12 @@ class MultimodalKGEvaluationDataset(Dataset):
             entity_text_embeddings: [num_entities, text_dim]
             entity_image_embeddings: [num_entities, image_dim]
             entity_image_mask: [num_entities]
-            relation_text_embeddings: [num_relations, text_dim]
             ground_truth: Dict mapping (h, r) -> list of valid tails (for filtered eval)
         """
         self.triples = triples
         self.entity_text_embeddings = entity_text_embeddings
         self.entity_image_embeddings = entity_image_embeddings
         self.entity_image_mask = entity_image_mask
-        self.relation_text_embeddings = relation_text_embeddings
         self.ground_truth = ground_truth
         
         self.num_entities = entity_text_embeddings.size(0)
@@ -225,7 +222,7 @@ class MultimodalKGEvaluationDataset(Dataset):
         Returns a single evaluation example.
         
         Returns:
-            head (text + image + mask), relation (text), tail_id, and filtering mask
+            head (text + image + mask), relation_id, tail_id, and filtering mask
         """
         h_id, r_id, t_id = self.triples[idx]
         
@@ -233,9 +230,6 @@ class MultimodalKGEvaluationDataset(Dataset):
         head_text_emb = self.entity_text_embeddings[h_id]
         head_image_emb = self.entity_image_embeddings[h_id]
         head_image_mask = self.entity_image_mask[h_id]
-        
-        # Get relation text embedding
-        relation_text_emb = self.relation_text_embeddings[r_id]
         
         # Create filtering mask for filtered evaluation
         # Set to True for all other valid tails (not the current target)
@@ -253,7 +247,6 @@ class MultimodalKGEvaluationDataset(Dataset):
             'head_text_emb': head_text_emb,
             'head_image_emb': head_image_emb,
             'head_image_mask': head_image_mask,
-            'relation_text_emb': relation_text_emb,
             'tail_id': t_id.item() if isinstance(t_id, torch.Tensor) else t_id,
             'head_id': h_id.item() if isinstance(h_id, torch.Tensor) else h_id,
             'relation_id': r_id.item() if isinstance(r_id, torch.Tensor) else r_id,
@@ -277,14 +270,14 @@ def load_multimodal_data(
                 entity_text.pt
                 entity_image.pt
                 entity_image_mask.pt
-                relation_text.pt
+    
     
     Args:
         data_dir: Path to data directory
         
     Returns:
         train_triples, valid_triples, test_triples,
-        entity_text_embs, entity_image_embs, entity_image_mask, relation_text_embs
+        entity_text_embs, entity_image_embs, entity_image_mask
     """
     data_dir = Path(data_dir)
     
