@@ -1,11 +1,11 @@
 """Generate multimodal entity context embeddings for context-aware Multimodal GWM-RNN.
 
 This script computes a "neighborhood summary" for each entity by aggregating
-MULTIMODAL EMBEDDINGS (text + image) of both neighbors and relations from the training graph.
+MULTIMODAL EMBEDDINGS (text + image) of neighbors from the training graph.
 
 Key Differences from Text-Only:
 1. Aggregates BOTH text and image embeddings
-2. Handles missing images in neighbors (uses <MISSING_IMG> representation)
+2. Handles missing images in neighbors (uses zero vectors for missing images)
 3. Outputs separate context files for text and image
 
 Context helps with entity disambiguation:
@@ -13,7 +13,7 @@ Context helps with entity disambiguation:
 - "Washington" (person) has neighbors with historical portraits
 
 For each edge (entity, relation, neighbor), we compute:
-    Context_text(entity) = Aggregate([neighbor_text + relation_text])
+    Context_text(entity) = Aggregate([neighbor_text])
     Context_image(entity) = Aggregate([neighbor_image]) where image exists
     Context_image_mask(entity) = Whether entity has image neighbors
 
@@ -33,14 +33,14 @@ from tqdm import tqdm
 
 
 def load_multimodal_kg_data(data_dir):
-    """Load multimodal entity/relation embeddings and training triples."""
+    """Load multimodal entity embeddings and training triples."""
     data_dir = Path(data_dir)
     
     print(f"Loading multimodal data from {data_dir}...")
     
     # Load entity embeddings (text and image)
-    entity_text_path = list((data_dir / 'embeddings').glob('entity_text_*.pt'))[0]
-    entity_image_path = list((data_dir / 'embeddings').glob('entity_image_*.pt'))[0]
+    entity_text_path = data_dir / 'embeddings' / 'entity_text.pt'
+    entity_image_path = data_dir / 'embeddings' / 'entity_image.pt'
     entity_image_mask_path = data_dir / 'embeddings' / 'entity_image_mask.pt'
     
     entity_text_embs = torch.load(entity_text_path)
@@ -52,10 +52,8 @@ def load_multimodal_kg_data(data_dir):
     print(f"✓ Loaded image mask: {entity_image_mask.shape}")
     print(f"   - Entities with images: {entity_image_mask.sum().item()}/{len(entity_image_mask)}")
     
-    # Load relation embeddings (text only)
-    relation_text_path = list((data_dir / 'embeddings').glob('relation_text_*.pt'))[0]
-    relation_text_embs = torch.load(relation_text_path)
-    print(f"✓ Loaded relation text embeddings: {relation_text_embs.shape}")
+    # Note: Relations use ONLY structural embeddings (no text embeddings to load)
+    print(f"📌 Relations use structural embeddings only (not included in context)")
     
     # Load training triples
     train_triples_path = data_dir / 'triples' / 'train.pt'
@@ -63,7 +61,7 @@ def load_multimodal_kg_data(data_dir):
     print(f"✓ Loaded training triples: {train_triples.shape}")
     print(f"  (Context computed from training only to prevent data leakage)")
     
-    return entity_text_embs, entity_image_embs, entity_image_mask, relation_text_embs, train_triples
+    return entity_text_embs, entity_image_embs, entity_image_mask, train_triples
 
 
 def build_neighbor_dict(triples, split_name=""):
@@ -106,7 +104,6 @@ def compute_multimodal_context_embeddings(
     entity_text_embs,
     entity_image_embs,
     entity_image_mask,
-    relation_text_embs,
     neighbors,
     aggregation='mean',
     top_k=None,
@@ -116,15 +113,16 @@ def compute_multimodal_context_embeddings(
     Compute multimodal context embeddings by aggregating neighbor text + images.
     
     For each edge (entity, relation, neighbor):
-        Context_text(entity) = Aggregate([neighbor_text + relation_text])
+        Context_text(entity) = Aggregate([neighbor_text])
         Context_image(entity) = Aggregate([neighbor_image]) for neighbors with images
         Context_image_mask(entity) = Whether entity has any image neighbors
+    
+    Note: Relations use ONLY structural embeddings (not aggregated in context).
     
     Args:
         entity_text_embs: [num_entities, text_dim]
         entity_image_embs: [num_entities, image_dim]
         entity_image_mask: [num_entities] - boolean (True = has image)
-        relation_text_embs: [num_relations, text_dim]
         neighbors: Dict[entity_id -> List[(neighbor_id, relation_id)]]
         aggregation: 'mean' or 'sum'
         top_k: Only aggregate top-k neighbors
@@ -146,14 +144,15 @@ def compute_multimodal_context_embeddings(
     context_image = torch.zeros(num_entities, image_dim)
     context_image_mask = torch.zeros(num_entities, dtype=torch.bool)
     
-    for entity_id in tqdm(range(num_entities), desc="Aggregating multimodal neighbors + relations"):
+    for entity_id in tqdm(range(num_entities), desc="Aggregating multimodal neighbors"):
         if entity_id in neighbors and len(neighbors[entity_id]) > 0:
             neighbor_relation_pairs = neighbors[entity_id]
             
-            # Aggregate text representations: neighbor_text + relation_text
+            # Aggregate text representations: neighbor_text only
+            # (Relations use structural embeddings, not aggregated in context)
             text_representations = []
             for neighbor_id, relation_id in neighbor_relation_pairs:
-                text_repr = entity_text_embs[neighbor_id] + relation_text_embs[relation_id]
+                text_repr = entity_text_embs[neighbor_id]
                 text_representations.append(text_repr)
             
             text_representations = torch.stack(text_representations)  # [num_neighbors, text_dim]
@@ -230,7 +229,7 @@ def main():
     print(f"Aggregation: {args.aggregation}")
     print(f"Top-k neighbors: {args.top_k if args.top_k else 'All (no filtering)'}")
     print(f"Context includes:")
-    print(f"  - Text: Neighbor entities + Relations")
+    print(f"  - Text: Neighbor entities ONLY (relations use structural embeddings)")
     print(f"  - Image: Neighbor entities (where available)")
     print(f"  - Computed from TRAINING triples ONLY")
     
@@ -239,8 +238,7 @@ def main():
     print("="*80)
     
     # Load multimodal data
-    entity_text_embs, entity_image_embs, entity_image_mask, \
-    relation_text_embs, train_triples = load_multimodal_kg_data(args.data_dir)
+    entity_text_embs, entity_image_embs, entity_image_mask, train_triples = load_multimodal_kg_data(args.data_dir)
     
     data_dir = Path(args.data_dir)
     
@@ -262,7 +260,6 @@ def main():
         entity_text_embs,
         entity_image_embs,
         entity_image_mask,
-        relation_text_embs,
         train_neighbors,
         aggregation=args.aggregation,
         top_k=args.top_k,
