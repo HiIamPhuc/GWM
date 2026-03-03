@@ -66,8 +66,8 @@ The world model architecture remains the same as text-only:
 
 Where:
 - context(h): Multimodal neighborhood summary
-- h: Fused multimodal head entity
-- r: Fused multimodal relation (text + structural, no images)
+- h: Fused multimodal head entity (text + image + structural)
+- r: Learnable structural embedding (NO text embedding for relations)
 ```
 
 **Why RNN, not Transformer?**

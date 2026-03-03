@@ -144,7 +144,7 @@ class MultimodalGWM_RNN(nn.Module):
         3-step LSTM sequence: [context(h), h, r] → tail
         - context(h): Neighborhood summary (mean of neighbor+relation pairs)
         - h: Head entity embedding (NOW MULTIMODAL)
-        - r: Relation embedding (text + structural)
+        - r: Relation embedding (learnable structural, no text)
     
     MULTIMODAL EMBEDDINGS (NEW):
         The model combines THREE sources of information:
@@ -258,15 +258,13 @@ class MultimodalGWM_RNN(nn.Module):
             use_gating=use_gating
         )
         
-        # Relation fusion: text + structural (no images for relations)
-        # We'll pad with zeros for the image dimension
-        self.relation_fusion = MultimodalFusionLayer(
-            text_dim=text_dim,
-            image_dim=image_dim,  # Will be zeros
-            structural_dim=structural_dim,
-            output_dim=fusion_dim,
-            dropout=dropout,
-            use_gating=False  # No gating needed (one modality is always zero)
+        # Relation projection: ONLY structural embeddings (following previous work)
+        # No text fusion for relations - just project structural to fusion_dim
+        self.relation_projector = nn.Sequential(
+            nn.Linear(structural_dim, fusion_dim),
+            nn.LayerNorm(fusion_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
         )
         
         # Input Projector: Fusion space → Trajectory space
@@ -331,7 +329,6 @@ class MultimodalGWM_RNN(nn.Module):
         head_text_emb: torch.Tensor,
         head_image_emb: torch.Tensor,
         head_image_mask: Optional[torch.Tensor],
-        relation_text_emb: torch.Tensor,
         head_entity_ids: torch.Tensor,
         relation_ids: torch.Tensor,
         entity_context_text: torch.Tensor,
@@ -343,7 +340,7 @@ class MultimodalGWM_RNN(nn.Module):
         
         MULTIMODAL FUSION:
             entity = Fusion(text ⊕ image ⊕ structural)
-            relation = Fusion(text ⊕ zeros ⊕ structural)  # No images for relations
+            relation = Projection(structural)  # Only learnable structural
         
         WORLD MODEL:
             [context(head), head, relation] → tail
@@ -352,7 +349,6 @@ class MultimodalGWM_RNN(nn.Module):
             head_text_emb: [batch, text_dim] - Text embeddings of head entities
             head_image_emb: [batch, image_dim] - Image embeddings of head entities
             head_image_mask: [batch] - Boolean (True = has image, False = missing)
-            relation_text_emb: [batch, text_dim] - Text embeddings of relations
             head_entity_ids: [batch] - Entity IDs for structural lookup
             relation_ids: [batch] - Relation IDs for structural lookup
             entity_context_text: [num_entities, text_dim] - Context text for all entities
@@ -372,7 +368,6 @@ class MultimodalGWM_RNN(nn.Module):
         # Apply modality-specific dropout
         head_text_emb = self.text_dropout(head_text_emb)
         head_image_emb = self.image_dropout(head_image_emb)
-        relation_text_emb = self.text_dropout(relation_text_emb)
         
         # Get structural embeddings
         head_structural = self.entity_structural_embeddings(head_entity_ids)  # [batch, structural_dim]
@@ -382,16 +377,14 @@ class MultimodalGWM_RNN(nn.Module):
         head_text_norm = F.normalize(head_text_emb, p=2, dim=-1)
         head_image_norm = F.normalize(head_image_emb, p=2, dim=-1)
         head_structural_norm = F.normalize(head_structural, p=2, dim=-1)
-        relation_text_norm = F.normalize(relation_text_emb, p=2, dim=-1)
         relation_structural_norm = F.normalize(relation_structural, p=2, dim=-1)
         
         # Fuse modalities
         # Entity fusion: text + image + structural
         fused_head = self.entity_fusion(head_text_norm, head_image_norm, head_structural_norm)  # [batch, fusion_dim]
         
-        # Relation fusion: text + zeros + structural (no images for relations)
-        relation_image_zeros = torch.zeros(batch_size, self.image_dim, device=device)
-        fused_relation = self.relation_fusion(relation_text_norm, relation_image_zeros, relation_structural_norm)
+        # Relation: ONLY structural (no text, following previous work)
+        fused_relation = self.relation_projector(relation_structural_norm)  # [batch, fusion_dim]
         
         # Context fusion: Get context for head entities
         context_text = entity_context_text[head_entity_ids]  # [batch, text_dim]

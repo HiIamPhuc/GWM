@@ -32,7 +32,6 @@ class MultimodalKGDataset(Dataset):
         entity_text_embeddings: torch.Tensor,
         entity_image_embeddings: torch.Tensor,
         entity_image_mask: torch.Tensor,
-        relation_text_embeddings: torch.Tensor,
         num_negatives: int = 10,
         mode: str = 'train',
         fixed_negatives: Optional[torch.Tensor] = None
@@ -43,7 +42,6 @@ class MultimodalKGDataset(Dataset):
             entity_text_embeddings: [num_entities, text_dim] - Text embeddings (BERT, etc.)
             entity_image_embeddings: [num_entities, image_dim] - Image embeddings (CLIP, etc.)
             entity_image_mask: [num_entities] - Boolean mask (True = has image, False = missing)
-            relation_text_embeddings: [num_relations, text_dim] - Relation text embeddings
             num_negatives: Number of negative samples per positive
             mode: 'train', 'valid', or 'test'
             fixed_negatives: [num_triples, num_negatives] pre-sampled negatives (optional)
@@ -52,13 +50,12 @@ class MultimodalKGDataset(Dataset):
         self.entity_text_embeddings = entity_text_embeddings
         self.entity_image_embeddings = entity_image_embeddings
         self.entity_image_mask = entity_image_mask
-        self.relation_text_embeddings = relation_text_embeddings
         self.num_negatives = num_negatives
         self.mode = mode
         self.fixed_negatives = fixed_negatives
         
         self.num_entities = entity_text_embeddings.size(0)
-        self.num_relations = relation_text_embeddings.size(0)
+        self.num_relations = int(triples[:, 1].max().item()) + 1
         
         # Validate dimensions
         assert entity_image_embeddings.size(0) == self.num_entities, \
@@ -102,7 +99,6 @@ class MultimodalKGDataset(Dataset):
             head_text_emb: [text_dim]
             head_image_emb: [image_dim]
             head_image_mask: scalar boolean (True = has image)
-            relation_text_emb: [text_dim]
             positive_tail_text_emb: [text_dim]
             positive_tail_image_emb: [image_dim]
             positive_tail_image_mask: scalar boolean
@@ -117,9 +113,6 @@ class MultimodalKGDataset(Dataset):
         head_text_emb = self.entity_text_embeddings[h_id]
         head_image_emb = self.entity_image_embeddings[h_id]
         head_image_mask = self.entity_image_mask[h_id]
-        
-        # Get relation embeddings (text only)
-        relation_text_emb = self.relation_text_embeddings[r_id]
         
         # Get positive tail embeddings (multimodal)
         positive_tail_text_emb = self.entity_text_embeddings[t_id]
@@ -151,9 +144,6 @@ class MultimodalKGDataset(Dataset):
             'head_text_emb': head_text_emb,
             'head_image_emb': head_image_emb,
             'head_image_mask': head_image_mask,
-            
-            # Relation (text only)
-            'relation_text_emb': relation_text_emb,
             
             # Positive tail (multimodal)
             'positive_tail_text_emb': positive_tail_text_emb,
@@ -309,11 +299,9 @@ def load_multimodal_data(
     entity_text_embs = torch.load(data_dir / 'embeddings' / 'entity_text.pt')
     entity_image_embs = torch.load(data_dir / 'embeddings' / 'entity_image.pt')
     entity_image_mask = torch.load(data_dir / 'embeddings' / 'entity_image_mask.pt')
-    relation_text_embs = torch.load(data_dir / 'embeddings' / 'relation_text.pt')
     
     print(f"✓ Loaded data:")
     print(f"   Entities: {entity_text_embs.size(0):,}")
-    print(f"   Relations: {relation_text_embs.size(0):,}")
     print(f"   Train triples: {len(train_triples):,}")
     print(f"   Valid triples: {len(valid_triples):,}")
     print(f"   Test triples: {len(test_triples):,}")
@@ -322,7 +310,7 @@ def load_multimodal_data(
     
     return (
         train_triples, valid_triples, test_triples,
-        entity_text_embs, entity_image_embs, entity_image_mask, relation_text_embs
+        entity_text_embs, entity_image_embs, entity_image_mask
     )
 
 
@@ -360,7 +348,6 @@ def create_multimodal_dataloaders(
     entity_text_embs: torch.Tensor,
     entity_image_embs: torch.Tensor,
     entity_image_mask: torch.Tensor,
-    relation_text_embs: torch.Tensor,
     batch_size: int = 256,
     num_negatives: int = 10,
     num_workers: int = 4,
@@ -372,7 +359,6 @@ def create_multimodal_dataloaders(
     Args:
         train_triples, valid_triples, test_triples: Triple tensors
         entity_text_embs, entity_image_embs, entity_image_mask: Entity embeddings
-        relation_text_embs: Relation embeddings
         batch_size: Batch size
         num_negatives: Number of negative samples
         num_workers: Number of data loading workers
@@ -399,7 +385,6 @@ def create_multimodal_dataloaders(
         entity_text_embeddings=entity_text_embs,
         entity_image_embeddings=entity_image_embs,
         entity_image_mask=entity_image_mask,
-        relation_text_embeddings=relation_text_embs,
         num_negatives=num_negatives,
         mode='train',
         fixed_negatives=fixed_negatives
@@ -410,7 +395,6 @@ def create_multimodal_dataloaders(
         entity_text_embeddings=entity_text_embs,
         entity_image_embeddings=entity_image_embs,
         entity_image_mask=entity_image_mask,
-        relation_text_embeddings=relation_text_embs,
         ground_truth=ground_truth
     )
     
@@ -419,7 +403,6 @@ def create_multimodal_dataloaders(
         entity_text_embeddings=entity_text_embs,
         entity_image_embeddings=entity_image_embs,
         entity_image_mask=entity_image_mask,
-        relation_text_embeddings=relation_text_embs,
         ground_truth=ground_truth
     )
     

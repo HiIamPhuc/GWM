@@ -42,18 +42,18 @@ class MultimodalKGPredictor:
         print(f"Loading multimodal data from {self.config['data_dir']}...")
         
         train_triples, valid_triples, test_triples, \
-        entity_text_embs, entity_image_embs, entity_image_mask, \
-        relation_text_embs = load_multimodal_data(
+        entity_text_embs, entity_image_embs, entity_image_mask = load_multimodal_data(
             data_dir=self.config['data_dir']
         )
         
         self.entity_text_embs = entity_text_embs.to(self.device)
         self.entity_image_embs = entity_image_embs.to(self.device)
         self.entity_image_mask = entity_image_mask.to(self.device)
-        self.relation_text_embs = relation_text_embs.to(self.device)
         
         self.num_entities = entity_text_embs.size(0)
-        self.num_relations = relation_text_embs.size(0)
+        # Get num_relations from triples
+        all_triples = torch.cat([train_triples, valid_triples, test_triples], dim=0)
+        self.num_relations = int(all_triples[:, 1].max().item()) + 1
         
         # Load entity/relation mappings
         entity2id_path = Path(self.config['data_dir']) / 'entity2id.json'
@@ -146,7 +146,6 @@ class MultimodalKGPredictor:
         head_text_emb = self.entity_text_embs[head_id].unsqueeze(0)  # [1, text_dim]
         head_image_emb = self.entity_image_embs[head_id].unsqueeze(0)  # [1, image_dim]
         head_image_mask = self.entity_image_mask[head_id].unsqueeze(0)  # [1]
-        relation_text_emb = self.relation_text_embs[relation_id].unsqueeze(0)  # [1, text_dim]
         
         head_ids = torch.tensor([head_id], dtype=torch.long).to(self.device)
         relation_ids = torch.tensor([relation_id], dtype=torch.long).to(self.device)
@@ -157,7 +156,6 @@ class MultimodalKGPredictor:
                 head_text_emb=head_text_emb,
                 head_image_emb=head_image_emb,
                 head_image_mask=head_image_mask,
-                relation_text_emb=relation_text_emb,
                 head_entity_ids=head_ids,
                 relation_ids=relation_ids,
                 entity_context_text=self.entity_context_text,
