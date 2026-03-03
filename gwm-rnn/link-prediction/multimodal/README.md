@@ -160,10 +160,10 @@ data_dir/
         valid.pt
         test.pt
     embeddings/
-        entity_text_bert.pt          # [num_entities, 768]
-        entity_image_clip.pt         # [num_entities, 512]
-        entity_image_mask.pt         # [num_entities] (boolean)
-        relation_text_bert.pt        # [num_relations, 768]
+        entity_text.pt          # [num_entities, text_dim]
+        entity_image.pt  # [num_entities, image_dim]
+        entity_image_mask.pt          # [num_entities] (boolean)
+        relation_text.pt        # [num_relations, text_dim]
 ```
 
 ### Evaluation (`utils.py`)
@@ -204,9 +204,7 @@ from multimodal import load_multimodal_data, create_multimodal_dataloaders
 train_triples, valid_triples, test_triples, \
 entity_text, entity_image, entity_image_mask, \
 relation_text = load_multimodal_data(
-    data_dir='./data/DB15K',
-    text_embedding_name='bert',
-    image_embedding_name='clip'
+    data_dir='./data/DB15K'
 )
 
 # Create dataloaders
