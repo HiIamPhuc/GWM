@@ -19,6 +19,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 from model import MultimodalGWM_RNN, InfoNCELoss, MarginRankingLoss, SelfAdversarialLoss, SelfAdversarialMarginLoss
 from dataset import load_multimodal_data, create_multimodal_dataloaders
@@ -141,6 +142,74 @@ def save_checkpoint(model, optimizer, epoch, metrics, save_path):
         'optimizer_state_dict': optimizer.state_dict(),
         'metrics': metrics
     }, save_path)
+
+
+def plot_training_curves(history, output_path, best_epoch):
+    """
+    Plot and save training curves from history dictionary.
+    
+    Args:
+        history: Dictionary with training history (train_loss, val_mrr, val_hits@10, val_mr)
+        output_path: Path to save the PNG file
+        best_epoch: Epoch number with best validation performance
+    """
+    try:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle('Training History', fontsize=16, fontweight='bold')
+        
+        epochs = range(1, len(history['train_loss']) + 1)
+        
+        # 1. Training Loss
+        ax1 = axes[0, 0]
+        ax1.plot(epochs, history['train_loss'], 'b-', linewidth=2, label='Train Loss')
+        ax1.axvline(x=best_epoch, color='r', linestyle='--', linewidth=1.5, 
+                    label=f'Best Epoch ({best_epoch})')
+        ax1.set_xlabel('Epoch', fontsize=11, fontweight='bold')
+        ax1.set_ylabel('Loss', fontsize=11, fontweight='bold')
+        ax1.set_title('Training Loss', fontsize=12, fontweight='bold')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # 2. Validation MRR
+        ax2 = axes[0, 1]
+        ax2.plot(epochs, history['val_mrr'], 'g-', linewidth=2, label='Validation MRR')
+        if best_epoch <= len(history['val_mrr']):
+            ax2.scatter([best_epoch], [history['val_mrr'][best_epoch-1]], 
+                        color='r', s=100, zorder=5, label=f'Best: {history["val_mrr"][best_epoch-1]:.4f}')
+        ax2.set_xlabel('Epoch', fontsize=11, fontweight='bold')
+        ax2.set_ylabel('MRR', fontsize=11, fontweight='bold')
+        ax2.set_title('Validation MRR', fontsize=12, fontweight='bold')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        # 3. Validation Hits@10
+        ax3 = axes[1, 0]
+        ax3.plot(epochs, history['val_hits@10'], 'orange', linewidth=2, label='Validation Hits@10')
+        if best_epoch <= len(history['val_hits@10']):
+            ax3.scatter([best_epoch], [history['val_hits@10'][best_epoch-1]], 
+                        color='r', s=100, zorder=5, label=f'Best: {history["val_hits@10"][best_epoch-1]:.4f}')
+        ax3.set_xlabel('Epoch', fontsize=11, fontweight='bold')
+        ax3.set_ylabel('Hits@10', fontsize=11, fontweight='bold')
+        ax3.set_title('Validation Hits@10', fontsize=12, fontweight='bold')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
+        # 4. Validation Mean Rank
+        ax4 = axes[1, 1]
+        ax4.plot(epochs, history['val_mr'], 'purple', linewidth=2, label='Validation MR')
+        ax4.axvline(x=best_epoch, color='r', linestyle='--', linewidth=1.5)
+        ax4.set_xlabel('Epoch', fontsize=11, fontweight='bold')
+        ax4.set_ylabel('Mean Rank (lower is better)', fontsize=11, fontweight='bold')
+        ax4.set_title('Validation Mean Rank', fontsize=12, fontweight='bold')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"✓ Saved training curves to: {output_path}")
+    except Exception as e:
+        print(f"⚠️  Could not generate training curves: {e}")
 
 
 def main(args):
@@ -440,6 +509,10 @@ def main(args):
     with open(output_dir / 'training_history.json', 'w') as f:
         json.dump(history, f, indent=2)
     
+    # Plot and save training curves
+    curves_path = output_dir / 'training_curves.png'
+    plot_training_curves(history, curves_path, best_epoch)
+    
     print("="*70)
     print("FINAL EVALUATION ON TEST SET (Multimodal Context-Aware)")
     print("="*70)
@@ -489,6 +562,7 @@ def main(args):
     print(f"Total training time: {total_training_time/60:.1f} min ({total_training_time/3600:.2f} hours)")
     print(f"\nResults saved to: {output_dir}")
     print(f"  • Model checkpoints: checkpoint_best.pt, checkpoint_last.pt")
+    print(f"  • Training curves: training_curves.png")
     print(f"  • Test predictions: test_predictions.json")
     print("="*70)
 
