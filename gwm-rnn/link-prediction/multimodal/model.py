@@ -229,11 +229,19 @@ class MultimodalGWM_RNN(nn.Module):
         print(f"      - Structural: {structural_dim}D (geometric, trainable)")
         print(f"      - Fused: {fusion_dim}D")
         print(f"   🔧 Fusion: {'Gated' if use_gating else 'Direct'}")
-        print(f"   📷 Missing Image Handling: Learnable <MISSING_IMG> token")
+        print(f"   � Missing Modality Handling:")
+        print(f"      - <MISSING_TEXT> token (learnable)")
+        print(f"      - <MISSING_IMG> token (learnable)")
         
-        # MISSING IMAGE TOKEN (CRITICAL)
-        # This is a learnable vector that represents "no image available"
+        # MISSING MODALITY TOKENS (CRITICAL)
+        # These are learnable vectors that represent "modality not available"
         # NOT zeros! Zeros have semantic meaning.
+        
+        # Missing text token (for entities without text embeddings)
+        self.missing_text_token = nn.Parameter(torch.randn(1, text_dim))
+        nn.init.xavier_uniform_(self.missing_text_token)
+        
+        # Missing image token (for entities without images)
         self.missing_image_token = nn.Parameter(torch.randn(1, image_dim))
         nn.init.xavier_uniform_(self.missing_image_token)
         
@@ -298,6 +306,32 @@ class MultimodalGWM_RNN(nn.Module):
         # Residual weight: Balance head vs delta
         self.residual_weight = nn.Parameter(torch.tensor(0.3))
         
+    def handle_missing_text(self, text_embeddings, text_mask):
+        """
+        Replace missing text with learnable <MISSING_TEXT> token.
+        
+        Args:
+            text_embeddings: [batch, text_dim] - Text embeddings (may contain zeros/invalid)
+            text_mask: [batch] - Boolean mask (True = has text, False = missing)
+            
+        Returns:
+            text_embeddings: [batch, text_dim] - With missing text replaced
+        """
+        if text_mask is None:
+            # If no mask provided, assume all text is present
+            return text_embeddings
+        
+        # Expand missing token to batch size
+        batch_size = text_embeddings.size(0)
+        missing_token = self.missing_text_token.expand(batch_size, -1)  # [batch, text_dim]
+        
+        # Replace missing text
+        # Where mask is False, use missing token
+        text_mask_expanded = text_mask.unsqueeze(-1).float()  # [batch, 1]
+        text_embeddings = text_embeddings * text_mask_expanded + missing_token * (1 - text_mask_expanded)
+        
+        return text_embeddings
+    
     def handle_missing_images(self, image_embeddings, image_mask):
         """
         Replace missing images with learnable <MISSING_IMG> token.
@@ -328,11 +362,13 @@ class MultimodalGWM_RNN(nn.Module):
         self,
         head_text_emb: torch.Tensor,
         head_image_emb: torch.Tensor,
+        head_text_mask: Optional[torch.Tensor],
         head_image_mask: Optional[torch.Tensor],
         head_entity_ids: torch.Tensor,
         relation_ids: torch.Tensor,
         entity_context_text: torch.Tensor,
         entity_context_image: torch.Tensor,
+        entity_context_text_mask: Optional[torch.Tensor],
         entity_context_image_mask: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -348,11 +384,13 @@ class MultimodalGWM_RNN(nn.Module):
         Args:
             head_text_emb: [batch, text_dim] - Text embeddings of head entities
             head_image_emb: [batch, image_dim] - Image embeddings of head entities
+            head_text_mask: [batch] - Boolean (True = has text, False = missing)
             head_image_mask: [batch] - Boolean (True = has image, False = missing)
             head_entity_ids: [batch] - Entity IDs for structural lookup
             relation_ids: [batch] - Relation IDs for structural lookup
             entity_context_text: [num_entities, text_dim] - Context text for all entities
             entity_context_image: [num_entities, image_dim] - Context images for all entities
+            entity_context_text_mask: [num_entities] - Context text masks
             entity_context_image_mask: [num_entities] - Context image masks
             
         Returns:
@@ -362,7 +400,8 @@ class MultimodalGWM_RNN(nn.Module):
         batch_size = head_text_emb.size(0)
         device = head_text_emb.device
         
-        # Handle missing images (replace with learnable token)
+        # Handle missing modalities (replace with learnable tokens)
+        head_text_emb = self.handle_missing_text(head_text_emb, head_text_mask)
         head_image_emb = self.handle_missing_images(head_image_emb, head_image_mask)
         
         # Apply modality-specific dropout
@@ -389,9 +428,11 @@ class MultimodalGWM_RNN(nn.Module):
         # Context fusion: Get context for head entities
         context_text = entity_context_text[head_entity_ids]  # [batch, text_dim]
         context_image = entity_context_image[head_entity_ids]  # [batch, image_dim]
+        context_text_mask = entity_context_text_mask[head_entity_ids] if entity_context_text_mask is not None else None
         context_image_mask = entity_context_image_mask[head_entity_ids] if entity_context_image_mask is not None else None
         
-        # Handle missing images in context
+        # Handle missing modalities in context
+        context_text = self.handle_missing_text(context_text, context_text_mask)
         context_image = self.handle_missing_images(context_image, context_image_mask)
         
         # Normalize context components
@@ -444,6 +485,7 @@ class MultimodalGWM_RNN(nn.Module):
         entity_ids: torch.Tensor,
         text_embeddings: torch.Tensor,
         image_embeddings: torch.Tensor,
+        text_mask: Optional[torch.Tensor],
         image_mask: Optional[torch.Tensor]
     ) -> torch.Tensor:
         """
@@ -455,12 +497,14 @@ class MultimodalGWM_RNN(nn.Module):
             entity_ids: [N] - Entity IDs
             text_embeddings: [N, text_dim] - Text embeddings
             image_embeddings: [N, image_dim] - Image embeddings
+            text_mask: [N] - Boolean mask (True = has text)
             image_mask: [N] - Boolean mask (True = has image)
             
         Returns:
             fused_embeddings: [N, fusion_dim] - Fused multimodal embeddings
         """
-        # Handle missing images
+        # Handle missing modalities
+        text_embeddings = self.handle_missing_text(text_embeddings, text_mask)
         image_embeddings = self.handle_missing_images(image_embeddings, image_mask)
         
         # Apply dropout
@@ -488,6 +532,7 @@ class MultimodalGWM_RNN(nn.Module):
         predicted_tail: torch.Tensor,
         candidate_text: torch.Tensor,
         candidate_image: torch.Tensor,
+        candidate_text_mask: Optional[torch.Tensor],
         candidate_image_mask: Optional[torch.Tensor],
         candidate_ids: torch.Tensor
     ) -> torch.Tensor:
@@ -498,6 +543,7 @@ class MultimodalGWM_RNN(nn.Module):
             predicted_tail: [batch, fusion_dim] - Predicted tail (already normalized)
             candidate_text: [num_candidates, text_dim] - Candidate text embeddings
             candidate_image: [num_candidates, image_dim] - Candidate image embeddings
+            candidate_text_mask: [num_candidates] - Candidate text masks
             candidate_image_mask: [num_candidates] - Candidate image masks
             candidate_ids: [num_candidates] - Candidate entity IDs
             
@@ -509,6 +555,7 @@ class MultimodalGWM_RNN(nn.Module):
             entity_ids=candidate_ids,
             text_embeddings=candidate_text,
             image_embeddings=candidate_image,
+            text_mask=candidate_text_mask,
             image_mask=candidate_image_mask
         )  # [num_candidates, fusion_dim]
         

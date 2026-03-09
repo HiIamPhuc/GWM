@@ -24,9 +24,11 @@ def compute_ranks(
     dataloader,
     all_entity_text_embs: torch.Tensor,
     all_entity_image_embs: torch.Tensor,
+    all_entity_text_mask: torch.Tensor,
     all_entity_image_mask: torch.Tensor,
     entity_context_text: torch.Tensor,
     entity_context_image: torch.Tensor,
+    entity_context_text_mask: torch.Tensor,
     entity_context_image_mask: torch.Tensor,
     device: str = 'cuda',
     filtered: bool = True,
@@ -52,9 +54,11 @@ def compute_ranks(
         dataloader: Evaluation dataloader (MultimodalKGEvaluationDataset)
         all_entity_text_embs: [num_entities, text_dim] - All entity text embeddings
         all_entity_image_embs: [num_entities, image_dim] - All entity image embeddings
+        all_entity_text_mask: [num_entities] - Text availability mask
         all_entity_image_mask: [num_entities] - Image availability mask
         entity_context_text: [num_entities, text_dim] - Context text for this split
         entity_context_image: [num_entities, image_dim] - Context images for this split
+        entity_context_text_mask: [num_entities] - Context text masks
         entity_context_image_mask: [num_entities] - Context image masks
         device: Device for computation
         filtered: If True, use filtered ranking (exclude other valid tails)
@@ -72,6 +76,7 @@ def compute_ranks(
     # Move all entity data to device
     all_entity_text_embs = all_entity_text_embs.to(device)
     all_entity_image_embs = all_entity_image_embs.to(device)
+    all_entity_text_mask = all_entity_text_mask.to(device)
     all_entity_image_mask = all_entity_image_mask.to(device)
     
     # Create reverse mapping if saving predictions
@@ -88,6 +93,7 @@ def compute_ranks(
             # Get batch data
             head_text_emb = batch['head_text_emb'].to(device)
             head_image_emb = batch['head_image_emb'].to(device)
+            head_text_mask = batch['head_text_mask'].to(device)
             head_image_mask = batch['head_image_mask'].to(device)
             tail_ids = batch['tail_id']
             filter_masks = batch.get('filter_mask') if filtered else None
@@ -104,11 +110,13 @@ def compute_ranks(
             predicted_tail, _ = model(
                 head_text_emb=head_text_emb,
                 head_image_emb=head_image_emb,
+                head_text_mask=head_text_mask,
                 head_image_mask=head_image_mask,
                 head_entity_ids=head_ids,
                 relation_ids=relation_ids,
                 entity_context_text=entity_context_text,
                 entity_context_image=entity_context_image,
+                entity_context_text_mask=entity_context_text_mask,
                 entity_context_image_mask=entity_context_image_mask
             )
             
@@ -117,6 +125,7 @@ def compute_ranks(
                 predicted_tail=predicted_tail,
                 candidate_text=all_entity_text_embs,
                 candidate_image=all_entity_image_embs,
+                candidate_text_mask=all_entity_text_mask,
                 candidate_image_mask=all_entity_image_mask,
                 candidate_ids=all_entity_ids
             )  # [batch, num_entities]
@@ -194,12 +203,15 @@ def evaluate_epoch(
     valid_loader,
     all_entity_text_embs,
     all_entity_image_embs,
+    all_entity_text_mask,
     all_entity_image_mask,
     entity_context_text_train,
     entity_context_image_train,
+    entity_context_text_mask_train,
     entity_context_image_mask_train,
     entity_context_text_valid,
     entity_context_image_valid,
+    entity_context_text_mask_valid,
     entity_context_image_mask_valid,
     loss_fn,
     device: str = 'cuda'
@@ -220,14 +232,17 @@ def evaluate_epoch(
             # Get batch data (multimodal)
             head_text_emb = batch['head_text_emb'].to(device)
             head_image_emb = batch['head_image_emb'].to(device)
+            head_text_mask = batch['head_text_mask'].to(device)
             head_image_mask = batch['head_image_mask'].to(device)
             
             positive_tail_text_emb = batch['positive_tail_text_emb'].to(device)
             positive_tail_image_emb = batch['positive_tail_image_emb'].to(device)
+            positive_tail_text_mask = batch['positive_tail_text_mask'].to(device)
             positive_tail_image_mask = batch['positive_tail_image_mask'].to(device)
             
             negative_tail_text_embs = batch['negative_tail_text_embs'].to(device)
             negative_tail_image_embs = batch['negative_tail_image_embs'].to(device)
+            negative_tail_text_masks = batch['negative_tail_text_masks'].to(device)
             negative_tail_image_masks = batch['negative_tail_image_masks'].to(device)
             
             # Get IDs
@@ -240,11 +255,13 @@ def evaluate_epoch(
             predicted_tail, _ = model(
                 head_text_emb=head_text_emb,
                 head_image_emb=head_image_emb,
+                head_text_mask=head_text_mask,
                 head_image_mask=head_image_mask,
                 head_entity_ids=head_ids,
                 relation_ids=relation_ids,
                 entity_context_text=entity_context_text_train,
                 entity_context_image=entity_context_image_train,
+                entity_context_text_mask=entity_context_text_mask_train,
                 entity_context_image_mask=entity_context_image_mask_train
             )
             
@@ -253,6 +270,7 @@ def evaluate_epoch(
                 entity_ids=tail_ids,
                 text_embeddings=positive_tail_text_emb,
                 image_embeddings=positive_tail_image_emb,
+                text_mask=positive_tail_text_mask,
                 image_mask=positive_tail_image_mask
             )
             
@@ -260,14 +278,16 @@ def evaluate_epoch(
             batch_size, num_negs = negative_tail_text_embs.shape[:2]
             neg_text_flat = negative_tail_text_embs.view(-1, negative_tail_text_embs.size(-1))
             neg_image_flat = negative_tail_image_embs.view(-1, negative_tail_image_embs.size(-1))
-            neg_mask_flat = negative_tail_image_masks.view(-1)
+            neg_text_mask_flat = negative_tail_text_masks.view(-1)
+            neg_image_mask_flat = negative_tail_image_masks.view(-1)
             neg_ids_flat = negative_tail_ids.view(-1)
             
             negative_tail_fused_flat = model.get_fused_entity_embeddings(
                 entity_ids=neg_ids_flat,
                 text_embeddings=neg_text_flat,
                 image_embeddings=neg_image_flat,
-                image_mask=neg_mask_flat
+                text_mask=neg_text_mask_flat,
+                image_mask=neg_image_mask_flat
             )
             negative_tail_fused = negative_tail_fused_flat.view(batch_size, num_negs, -1)
             
@@ -283,9 +303,11 @@ def evaluate_epoch(
         dataloader=valid_loader,
         all_entity_text_embs=all_entity_text_embs,
         all_entity_image_embs=all_entity_image_embs,
+        all_entity_text_mask=all_entity_text_mask,
         all_entity_image_mask=all_entity_image_mask,
         entity_context_text=entity_context_text_valid,
         entity_context_image=entity_context_image_valid,
+        entity_context_text_mask=entity_context_text_mask_valid,
         entity_context_image_mask=entity_context_image_mask_valid,
         device=device,
         filtered=True

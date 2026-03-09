@@ -3,8 +3,7 @@ Multimodal Dataset for Knowledge Graph Completion
 
 Handles loading multimodal KG triples with:
 - Text embeddings (BERT, RoBERTa, LLaMA, etc.)
-- Image embeddings (CLIP, ViT, BEIT, etc.)
-- Missing image masks (some entities don't have images)
+- Image embeddings (CLIP, ViT, BEIT, etc.)- Missing text masks (some entities don't have text embeddings)- Missing image masks (some entities don't have images)
 """
 
 import torch
@@ -20,7 +19,7 @@ class MultimodalKGDataset(Dataset):
     Multimodal Dataset for Knowledge Graph Completion.
     
     Handles entities with BOTH text and image information.
-    Some entities may not have images (handled by image_mask).
+    Some entities may not have text or images (handled by masks).
     
     For each positive triple (h, r, t), generates negative samples by
     randomly corrupting the tail entity.
@@ -31,6 +30,7 @@ class MultimodalKGDataset(Dataset):
         triples: torch.Tensor,
         entity_text_embeddings: torch.Tensor,
         entity_image_embeddings: torch.Tensor,
+        entity_text_mask: torch.Tensor,
         entity_image_mask: torch.Tensor,
         num_negatives: int = 10,
         mode: str = 'train',
@@ -41,6 +41,7 @@ class MultimodalKGDataset(Dataset):
             triples: [num_triples, 3] tensor of (head_id, relation_id, tail_id)
             entity_text_embeddings: [num_entities, text_dim] - Text embeddings (BERT, etc.)
             entity_image_embeddings: [num_entities, image_dim] - Image embeddings (CLIP, etc.)
+            entity_text_mask: [num_entities] - Boolean mask (True = has text, False = missing)
             entity_image_mask: [num_entities] - Boolean mask (True = has image, False = missing)
             num_negatives: Number of negative samples per positive
             mode: 'train', 'valid', or 'test'
@@ -49,6 +50,7 @@ class MultimodalKGDataset(Dataset):
         self.triples = triples
         self.entity_text_embeddings = entity_text_embeddings
         self.entity_image_embeddings = entity_image_embeddings
+        self.entity_text_mask = entity_text_mask
         self.entity_image_mask = entity_image_mask
         self.num_negatives = num_negatives
         self.mode = mode
@@ -60,17 +62,22 @@ class MultimodalKGDataset(Dataset):
         # Validate dimensions
         assert entity_image_embeddings.size(0) == self.num_entities, \
             f"Image embeddings size {entity_image_embeddings.size(0)} != num_entities {self.num_entities}"
+        assert entity_text_mask.size(0) == self.num_entities, \
+            f"Text mask size {entity_text_mask.size(0)} != num_entities {self.num_entities}"
         assert entity_image_mask.size(0) == self.num_entities, \
             f"Image mask size {entity_image_mask.size(0)} != num_entities {self.num_entities}"
         
-        # Report missing images
-        num_missing = (~entity_image_mask).sum().item()
-        pct_missing = 100 * num_missing / self.num_entities
+        # Report missing modalities
+        num_missing_text = (~entity_text_mask).sum().item()
+        pct_missing_text = 100 * num_missing_text / self.num_entities
+        num_missing_images = (~entity_image_mask).sum().item()
+        pct_missing_images = 100 * num_missing_images / self.num_entities
         print(f"📊 Dataset Statistics:")
         print(f"   Entities: {self.num_entities:,}")
         print(f"   Relations: {self.num_relations:,}")
         print(f"   Triples: {len(self.triples):,}")
-        print(f"   Missing Images: {num_missing:,} ({pct_missing:.1f}%)")
+        print(f"   Missing Text: {num_missing_text:,} ({pct_missing_text:.1f}%)")
+        print(f"   Missing Images: {num_missing_images:,} ({pct_missing_images:.1f}%)")
         
         # Validate fixed negatives if provided
         if fixed_negatives is not None:
@@ -112,11 +119,13 @@ class MultimodalKGDataset(Dataset):
         # Get head embeddings (multimodal)
         head_text_emb = self.entity_text_embeddings[h_id]
         head_image_emb = self.entity_image_embeddings[h_id]
+        head_text_mask = self.entity_text_mask[h_id]
         head_image_mask = self.entity_image_mask[h_id]
         
         # Get positive tail embeddings (multimodal)
         positive_tail_text_emb = self.entity_text_embeddings[t_id]
         positive_tail_image_emb = self.entity_image_embeddings[t_id]
+        positive_tail_text_mask = self.entity_text_mask[t_id]
         positive_tail_image_mask = self.entity_image_mask[t_id]
         
         # Generate negative samples (corrupt tail only)
@@ -131,28 +140,33 @@ class MultimodalKGDataset(Dataset):
             # Get multimodal embeddings for negatives
             negative_tail_text_embs = self.entity_text_embeddings[negative_tail_ids]
             negative_tail_image_embs = self.entity_image_embeddings[negative_tail_ids]
+            negative_tail_text_masks = self.entity_text_mask[negative_tail_ids]
             negative_tail_image_masks = self.entity_image_mask[negative_tail_ids]
         else:
             # For validation/test, we'll do full ranking, so no negatives needed during data loading
             negative_tail_ids = torch.zeros(self.num_negatives, dtype=torch.long)
             negative_tail_text_embs = torch.zeros(self.num_negatives, self.entity_text_embeddings.size(1))
             negative_tail_image_embs = torch.zeros(self.num_negatives, self.entity_image_embeddings.size(1))
+            negative_tail_text_masks = torch.zeros(self.num_negatives, dtype=torch.bool)
             negative_tail_image_masks = torch.zeros(self.num_negatives, dtype=torch.bool)
         
         return {
             # Head (multimodal)
             'head_text_emb': head_text_emb,
             'head_image_emb': head_image_emb,
+            'head_text_mask': head_text_mask,
             'head_image_mask': head_image_mask,
             
             # Positive tail (multimodal)
             'positive_tail_text_emb': positive_tail_text_emb,
             'positive_tail_image_emb': positive_tail_image_emb,
+            'positive_tail_text_mask': positive_tail_text_mask,
             'positive_tail_image_mask': positive_tail_image_mask,
             
             # Negative tails (multimodal)
             'negative_tail_text_embs': negative_tail_text_embs,
             'negative_tail_image_embs': negative_tail_image_embs,
+            'negative_tail_text_masks': negative_tail_text_masks,
             'negative_tail_image_masks': negative_tail_image_masks,
             'negative_tail_ids': negative_tail_ids,
             
@@ -195,6 +209,7 @@ class MultimodalKGEvaluationDataset(Dataset):
         triples: torch.Tensor,
         entity_text_embeddings: torch.Tensor,
         entity_image_embeddings: torch.Tensor,
+        entity_text_mask: torch.Tensor,
         entity_image_mask: torch.Tensor,
         ground_truth: Optional[Dict] = None
     ):
@@ -203,17 +218,19 @@ class MultimodalKGEvaluationDataset(Dataset):
             triples: [num_triples, 3]
             entity_text_embeddings: [num_entities, text_dim]
             entity_image_embeddings: [num_entities, image_dim]
+            entity_text_mask: [num_entities]
             entity_image_mask: [num_entities]
             ground_truth: Dict mapping (h, r) -> list of valid tails (for filtered eval)
         """
         self.triples = triples
         self.entity_text_embeddings = entity_text_embeddings
         self.entity_image_embeddings = entity_image_embeddings
+        self.entity_text_mask = entity_text_mask
         self.entity_image_mask = entity_image_mask
         self.ground_truth = ground_truth
         
         self.num_entities = entity_text_embeddings.size(0)
-        
+    
     def __len__(self):
         return len(self.triples)
     
@@ -222,13 +239,14 @@ class MultimodalKGEvaluationDataset(Dataset):
         Returns a single evaluation example.
         
         Returns:
-            head (text + image + mask), relation_id, tail_id, and filtering mask
+            head (text + image + masks), relation_id, tail_id, and filtering mask
         """
         h_id, r_id, t_id = self.triples[idx]
         
         # Get head multimodal embeddings
         head_text_emb = self.entity_text_embeddings[h_id]
         head_image_emb = self.entity_image_embeddings[h_id]
+        head_text_mask = self.entity_text_mask[h_id]
         head_image_mask = self.entity_image_mask[h_id]
         
         # Create filtering mask for filtered evaluation
@@ -246,6 +264,7 @@ class MultimodalKGEvaluationDataset(Dataset):
         return {
             'head_text_emb': head_text_emb,
             'head_image_emb': head_image_emb,
+            'head_text_mask': head_text_mask,
             'head_image_mask': head_image_mask,
             'tail_id': t_id.item() if isinstance(t_id, torch.Tensor) else t_id,
             'head_id': h_id.item() if isinstance(h_id, torch.Tensor) else h_id,
@@ -256,7 +275,7 @@ class MultimodalKGEvaluationDataset(Dataset):
 
 def load_multimodal_data(
     data_dir: str
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Load multimodal KG data from directory.
     
@@ -269,6 +288,7 @@ def load_multimodal_data(
             embeddings/
                 entity_text.pt
                 entity_image.pt
+                entity_text_mask.pt
                 entity_image_mask.pt
     
     
@@ -277,7 +297,7 @@ def load_multimodal_data(
         
     Returns:
         train_triples, valid_triples, test_triples,
-        entity_text_embs, entity_image_embs, entity_image_mask
+        entity_text_embs, entity_image_embs, entity_text_mask, entity_image_mask
     """
     data_dir = Path(data_dir)
     
@@ -291,6 +311,7 @@ def load_multimodal_data(
     print(f"Loading embeddings...")
     entity_text_embs = torch.load(data_dir / 'embeddings' / 'entity_text.pt')
     entity_image_embs = torch.load(data_dir / 'embeddings' / 'entity_image.pt')
+    entity_text_mask = torch.load(data_dir / 'embeddings' / 'entity_text_mask.pt')
     entity_image_mask = torch.load(data_dir / 'embeddings' / 'entity_image_mask.pt')
     
     print(f"✓ Loaded data:")
@@ -300,10 +321,12 @@ def load_multimodal_data(
     print(f"   Test triples: {len(test_triples):,}")
     print(f"   Text dim: {entity_text_embs.size(1)}")
     print(f"   Image dim: {entity_image_embs.size(1)}")
+    print(f"   Text coverage: {entity_text_mask.float().mean()*100:.1f}%")
+    print(f"   Image coverage: {entity_image_mask.float().mean()*100:.1f}%")
     
     return (
         train_triples, valid_triples, test_triples,
-        entity_text_embs, entity_image_embs, entity_image_mask
+        entity_text_embs, entity_image_embs, entity_text_mask, entity_image_mask
     )
 
 
@@ -340,6 +363,7 @@ def create_multimodal_dataloaders(
     test_triples: torch.Tensor,
     entity_text_embs: torch.Tensor,
     entity_image_embs: torch.Tensor,
+    entity_text_mask: torch.Tensor,
     entity_image_mask: torch.Tensor,
     batch_size: int = 256,
     num_negatives: int = 10,
@@ -351,7 +375,8 @@ def create_multimodal_dataloaders(
     
     Args:
         train_triples, valid_triples, test_triples: Triple tensors
-        entity_text_embs, entity_image_embs, entity_image_mask: Entity embeddings
+        entity_text_embs, entity_image_embs: Entity embeddings
+        entity_text_mask, entity_image_mask: Entity modality masks
         batch_size: Batch size
         num_negatives: Number of negative samples
         num_workers: Number of data loading workers
@@ -377,6 +402,7 @@ def create_multimodal_dataloaders(
         triples=train_triples,
         entity_text_embeddings=entity_text_embs,
         entity_image_embeddings=entity_image_embs,
+        entity_text_mask=entity_text_mask,
         entity_image_mask=entity_image_mask,
         num_negatives=num_negatives,
         mode='train',
@@ -387,6 +413,7 @@ def create_multimodal_dataloaders(
         triples=valid_triples,
         entity_text_embeddings=entity_text_embs,
         entity_image_embeddings=entity_image_embs,
+        entity_text_mask=entity_text_mask,
         entity_image_mask=entity_image_mask,
         ground_truth=ground_truth
     )
@@ -395,6 +422,7 @@ def create_multimodal_dataloaders(
         triples=test_triples,
         entity_text_embeddings=entity_text_embs,
         entity_image_embeddings=entity_image_embs,
+        entity_text_mask=entity_text_mask,
         entity_image_mask=entity_image_mask,
         ground_truth=ground_truth
     )
