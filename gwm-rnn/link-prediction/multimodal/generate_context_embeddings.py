@@ -41,14 +41,18 @@ def load_multimodal_kg_data(data_dir):
     # Load entity embeddings (text and image)
     entity_text_path = data_dir / 'embeddings' / 'entity_text.pt'
     entity_image_path = data_dir / 'embeddings' / 'entity_image.pt'
+    entity_text_mask_path = data_dir / 'embeddings' / 'entity_text_mask.pt'
     entity_image_mask_path = data_dir / 'embeddings' / 'entity_image_mask.pt'
     
     entity_text_embs = torch.load(entity_text_path)
     entity_image_embs = torch.load(entity_image_path)
+    entity_text_mask = torch.load(entity_text_mask_path)
     entity_image_mask = torch.load(entity_image_mask_path)
     
     print(f"✓ Loaded entity text embeddings: {entity_text_embs.shape}")
     print(f"✓ Loaded entity image embeddings: {entity_image_embs.shape}")
+    print(f"✓ Loaded text mask: {entity_text_mask.shape}")
+    print(f"   - Entities with text: {entity_text_mask.sum().item()}/{len(entity_text_mask)}")
     print(f"✓ Loaded image mask: {entity_image_mask.shape}")
     print(f"   - Entities with images: {entity_image_mask.sum().item()}/{len(entity_image_mask)}")
     
@@ -61,7 +65,7 @@ def load_multimodal_kg_data(data_dir):
     print(f"✓ Loaded training triples: {train_triples.shape}")
     print(f"  (Context computed from training only to prevent data leakage)")
     
-    return entity_text_embs, entity_image_embs, entity_image_mask, train_triples
+    return entity_text_embs, entity_image_embs, entity_text_mask, entity_image_mask, train_triples
 
 
 def build_neighbor_dict(triples, split_name=""):
@@ -103,6 +107,7 @@ def build_neighbor_dict(triples, split_name=""):
 def compute_multimodal_context_embeddings(
     entity_text_embs,
     entity_image_embs,
+    entity_text_mask,
     entity_image_mask,
     neighbors,
     aggregation='mean',
@@ -113,7 +118,8 @@ def compute_multimodal_context_embeddings(
     Compute multimodal context embeddings by aggregating neighbor text + images.
     
     For each edge (entity, relation, neighbor):
-        Context_text(entity) = Aggregate([neighbor_text])
+        Context_text(entity) = Aggregate([neighbor_text]) for neighbors with text
+        Context_text_mask(entity) = Whether entity has any text neighbors
         Context_image(entity) = Aggregate([neighbor_image]) for neighbors with images
         Context_image_mask(entity) = Whether entity has any image neighbors
     
@@ -122,6 +128,7 @@ def compute_multimodal_context_embeddings(
     Args:
         entity_text_embs: [num_entities, text_dim]
         entity_image_embs: [num_entities, image_dim]
+        entity_text_mask: [num_entities] - boolean (True = has text)
         entity_image_mask: [num_entities] - boolean (True = has image)
         neighbors: Dict[entity_id -> List[(neighbor_id, relation_id)]]
         aggregation: 'mean' or 'sum'
@@ -130,6 +137,7 @@ def compute_multimodal_context_embeddings(
     
     Returns:
         context_text: [num_entities, text_dim]
+        context_text_mask: [num_entities] - boolean (True = has text neighbors)
         context_image: [num_entities, image_dim]
         context_image_mask: [num_entities] - boolean (True = has image neighbors)
     """
@@ -141,6 +149,7 @@ def compute_multimodal_context_embeddings(
     image_dim = entity_image_embs.size(1)
     
     context_text = torch.zeros(num_entities, text_dim)
+    context_text_mask = torch.zeros(num_entities, dtype=torch.bool)
     context_image = torch.zeros(num_entities, image_dim)
     context_image_mask = torch.zeros(num_entities, dtype=torch.bool)
     
@@ -148,26 +157,33 @@ def compute_multimodal_context_embeddings(
         if entity_id in neighbors and len(neighbors[entity_id]) > 0:
             neighbor_relation_pairs = neighbors[entity_id]
             
-            # Aggregate text representations: neighbor_text only
+            # Aggregate text representations: neighbor_text only (where text exists)
             # (Relations use structural embeddings, not aggregated in context)
             text_representations = []
             for neighbor_id, relation_id in neighbor_relation_pairs:
-                text_repr = entity_text_embs[neighbor_id]
-                text_representations.append(text_repr)
+                if entity_text_mask[neighbor_id]:  # Only include neighbors with text
+                    text_repr = entity_text_embs[neighbor_id]
+                    text_representations.append(text_repr)
             
-            text_representations = torch.stack(text_representations)  # [num_neighbors, text_dim]
+            if len(text_representations) == 0:
+                # No text neighbors - leave as zeros, mask as False
+                context_text_mask[entity_id] = False
+            else:
+                # Entity has at least one text neighbor
+                context_text_mask[entity_id] = True
+                text_representations = torch.stack(text_representations)  # [num_text_neighbors, text_dim]
             
-            # Apply top-k selection if specified
-            if top_k is not None and len(text_representations) > top_k:
-                edge_scores = text_representations.norm(dim=1)
-                top_k_indices = torch.topk(edge_scores, k=top_k, largest=True).indices
-                text_representations = text_representations[top_k_indices]
-            
-            # Aggregate text context
-            if aggregation == 'mean':
-                context_text[entity_id] = text_representations.mean(dim=0)
-            elif aggregation == 'sum':
-                context_text[entity_id] = text_representations.sum(dim=0)
+                # Apply top-k selection if specified
+                if top_k is not None and len(text_representations) > top_k:
+                    edge_scores = text_representations.norm(dim=1)
+                    top_k_indices = torch.topk(edge_scores, k=top_k, largest=True).indices
+                    text_representations = text_representations[top_k_indices]
+                
+                # Aggregate text context
+                if aggregation == 'mean':
+                    context_text[entity_id] = text_representations.mean(dim=0)
+                elif aggregation == 'sum':
+                    context_text[entity_id] = text_representations.sum(dim=0)
             
             # Aggregate image representations (only from neighbors that have images)
             image_representations = []
@@ -199,16 +215,16 @@ def compute_multimodal_context_embeddings(
             pass
     
     # Statistics
-    num_with_text_context = (context_text.norm(dim=1) > 0).sum().item()
+    num_with_text_context = context_text_mask.sum().item()
     num_with_image_context = context_image_mask.sum().item()
     
     print(f"✓ Multimodal context embeddings computed:")
     print(f"  - Text context shape: {context_text.shape}")
     print(f"  - Image context shape: {context_image.shape}")
-    print(f"  - Entities with non-zero text context: {num_with_text_context}/{num_entities}")
+    print(f"  - Entities with text neighbors: {num_with_text_context}/{num_entities} ({100*num_with_text_context/num_entities:.1f}%)")
     print(f"  - Entities with image neighbors: {num_with_image_context}/{num_entities} ({100*num_with_image_context/num_entities:.1f}%)")
     
-    return context_text, context_image, context_image_mask
+    return context_text, context_text_mask, context_image, context_image_mask
 
 
 def main():
@@ -238,7 +254,7 @@ def main():
     print("="*80)
     
     # Load multimodal data
-    entity_text_embs, entity_image_embs, entity_image_mask, train_triples = load_multimodal_kg_data(args.data_dir)
+    entity_text_embs, entity_image_embs, entity_text_mask, entity_image_mask, train_triples = load_multimodal_kg_data(args.data_dir)
     
     data_dir = Path(args.data_dir)
     
@@ -256,9 +272,10 @@ def main():
     
     train_neighbors = build_neighbor_dict(train_triples, split_name="train")
     
-    context_text, context_image, context_image_mask = compute_multimodal_context_embeddings(
+    context_text, context_text_mask, context_image, context_image_mask = compute_multimodal_context_embeddings(
         entity_text_embs,
         entity_image_embs,
+        entity_text_mask,
         entity_image_mask,
         train_neighbors,
         aggregation=args.aggregation,
@@ -272,6 +289,11 @@ def main():
     torch.save(context_text, contexts_dir / "entity_context_text_valid.pt")
     torch.save(context_text, contexts_dir / "entity_context_text_test.pt")
     
+    # Text masks
+    torch.save(context_text_mask, contexts_dir / "entity_context_text_mask_train.pt")
+    torch.save(context_text_mask, contexts_dir / "entity_context_text_mask_valid.pt")
+    torch.save(context_text_mask, contexts_dir / "entity_context_text_mask_test.pt")
+    
     # Image contexts
     torch.save(context_image, contexts_dir / "entity_context_image_train.pt")
     torch.save(context_image, contexts_dir / "entity_context_image_valid.pt")
@@ -284,6 +306,7 @@ def main():
     
     print(f"\n✅ Saved multimodal contexts to:")
     print(f"   - {contexts_dir}/entity_context_text_[train|valid|test].pt")
+    print(f"   - {contexts_dir}/entity_context_text_mask_[train|valid|test].pt")
     print(f"   - {contexts_dir}/entity_context_image_[train|valid|test].pt")
     print(f"   - {contexts_dir}/entity_context_image_mask_[train|valid|test].pt")
     
@@ -296,12 +319,12 @@ def main():
     print(f"✅ Multimodal context embeddings:")
     print(f"   - Text context: {context_text.shape}")
     print(f"   - Image context: {context_image.shape}")
-    print(f"   - Entities with text context: {(context_text.norm(dim=1) > 0).sum().item()}/{context_text.shape[0]}")
-    print(f"   - Entities with image neighbors: {context_image_mask.sum().item()}/{context_image_mask.shape[0]}")
+    print(f"   - Entities with text context: {context_text_mask.sum().item()}/{context_text.shape[0]} ({100*context_text_mask.float().mean():.1f}%)")
+    print(f"   - Entities with image context: {context_image_mask.sum().item()}/{context_image_mask.shape[0]} ({100*context_image_mask.float().mean():.1f}%)")
     print(f"   - Computed from: {train_triples.shape[0]:,} training triples")
     print(f"   - Aggregation: {args.aggregation}")
     print(f"   - Top-k filtering: {args.top_k if args.top_k else 'None (use all neighbors)'}")
-    print("\n✅ Saved 9 files (text/image/mask × train/valid/test) - all from training only")
+    print("\n✅ Saved 12 files (text/text_mask/image/image_mask × train/valid/test) - all from training only")
     print("="*80)
 
 
