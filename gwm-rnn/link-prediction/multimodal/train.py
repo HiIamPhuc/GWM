@@ -337,14 +337,17 @@ def main(args):
     # Move context embeddings to device
     entity_context_text_train = entity_context_text_train.to(device)
     entity_context_image_train = entity_context_image_train.to(device)
+    entity_context_text_mask_train = entity_context_text_mask_train.to(device)
     entity_context_image_mask_train = entity_context_image_mask_train.to(device)
     
     entity_context_text_valid = entity_context_text_valid.to(device)
     entity_context_image_valid = entity_context_image_valid.to(device)
+    entity_context_text_mask_valid = entity_context_text_mask_valid.to(device)
     entity_context_image_mask_valid = entity_context_image_mask_valid.to(device)
     
     entity_context_text_test = entity_context_text_test.to(device)
     entity_context_image_test = entity_context_image_test.to(device)
+    entity_context_text_mask_test = entity_context_text_mask_test.to(device)
     entity_context_image_mask_test = entity_context_image_mask_test.to(device)
     
     # Move all entity data to device

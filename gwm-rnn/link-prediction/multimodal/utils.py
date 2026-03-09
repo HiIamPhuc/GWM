@@ -79,6 +79,12 @@ def compute_ranks(
     all_entity_text_mask = all_entity_text_mask.to(device)
     all_entity_image_mask = all_entity_image_mask.to(device)
     
+    # Move context data to device
+    entity_context_text = entity_context_text.to(device)
+    entity_context_image = entity_context_image.to(device)
+    entity_context_text_mask = entity_context_text_mask.to(device)
+    entity_context_image_mask = entity_context_image_mask.to(device)
+    
     # Create reverse mapping if saving predictions
     id2entity = None
     if save_predictions and entity2id:

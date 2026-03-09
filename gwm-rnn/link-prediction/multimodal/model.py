@@ -428,8 +428,9 @@ class MultimodalGWM_RNN(nn.Module):
         # Context fusion: Get context for head entities
         context_text = entity_context_text[head_entity_ids]  # [batch, text_dim]
         context_image = entity_context_image[head_entity_ids]  # [batch, image_dim]
-        context_text_mask = entity_context_text_mask[head_entity_ids] if entity_context_text_mask is not None else None
-        context_image_mask = entity_context_image_mask[head_entity_ids] if entity_context_image_mask is not None else None
+        # Move masks to device before indexing to avoid device mismatch
+        context_text_mask = entity_context_text_mask.to(device)[head_entity_ids] if entity_context_text_mask is not None else None
+        context_image_mask = entity_context_image_mask.to(device)[head_entity_ids] if entity_context_image_mask is not None else None
         
         # Handle missing modalities in context
         context_text = self.handle_missing_text(context_text, context_text_mask)
